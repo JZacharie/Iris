@@ -1,0 +1,24 @@
+services:
+  iris:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      IRIS_HOST: "0.0.0.0"
+      IRIS_PORT: "8080"
+      IRIS_MQTT_HOST: "mosquitto"
+      IRIS_MQTT_PORT: "1883"
+      IRIS_STATE_FILE: "/app/data/iris_state.json"
+    volumes:
+      - iris_data:/app/data
+    depends_on:
+      - mosquitto
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    command: mosquitto -c /mosquitto-no-auth.conf
+
+volumes:
+  iris_data:

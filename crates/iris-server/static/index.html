@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#090d16" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <link rel="manifest" href="/manifest.json" />
+  <title>Iris — Observabilité & Organisation</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --surface: #111827;
+      --surface2: #1e293b;
+      --border: #263349;
+      --primary: #38bdf8;
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+      --ok: #22c55e;
+      --warn: #f59e0b;
+      --crit: #ef4444;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, sans-serif; overflow: hidden; }
+    .app { display: flex; flex-direction: column; height: 100vh; }
+    .hud {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 8px 14px; background: rgba(17,24,39,0.96); border-bottom: 1px solid var(--border);
+    }
+    .hud.hidden { display: none; }
+    .brand { font-weight: 800; color: var(--primary); letter-spacing: 0.08em; margin-right: 8px; }
+    .pills { display: flex; gap: 8px; overflow-x: auto; flex: 1; align-items: center; }
+    .pill {
+      border: 1px solid var(--border); background: var(--surface2); color: var(--text);
+      padding: 6px 12px; border-radius: 999px; cursor: pointer; white-space: nowrap; font-size: 13px;
+    }
+    .pill.active { background: rgba(56,189,248,0.2); border-color: var(--primary); color: var(--primary); font-weight: 600; }
+    .controls { display: flex; align-items: center; gap: 8px; }
+    .mqtt-badge {
+      display: flex; align-items: center; gap: 6px; padding: 5px 10px;
+      border-radius: 999px; background: var(--surface2); font-size: 12px;
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+    .dot.CONNECTED { background: var(--ok); }
+    .dot.CONNECTING { background: var(--warn); }
+    .dot.ERROR { background: var(--crit); }
+    .btn {
+      background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+      padding: 6px 11px; border-radius: 8px; cursor: pointer; font-size: 13px;
+    }
+    .btn.primary { background: var(--primary); color: #041e2b; border-color: var(--primary); font-weight: 600; }
+    .btn.danger { background: rgba(239,68,68,0.2); border-color: var(--crit); color: #fecaca; }
+    .btn.ok { background: rgba(34,197,94,0.2); border-color: var(--ok); color: #bbf7d0; }
+    .alert-banner {
+      display: none; align-items: center; justify-content: space-between; gap: 16px;
+      margin: 8px 12px 0; padding: 10px 16px; border-radius: 12px;
+      background: rgba(239,68,68,0.18); border: 1.5px solid var(--crit);
+    }
+    .alert-banner.visible { display: flex; }
+    .alert-tag { background: var(--crit); color: #fff; font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 4px; margin-right: 8px; }
+    .stage { flex: 1; position: relative; overflow: hidden; }
+    iframe.dashboard-frame { width: 100%; height: 100%; border: none; background: var(--bg); }
+    .org-view { height: 100%; overflow-y: auto; padding: 24px; }
+    .grid-2 { display: grid; grid-template-columns: 0.42fr 0.58fr; gap: 20px; height: 100%; }
+    .col { display: flex; flex-direction: column; gap: 16px; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 20px; }
+    .clock-big { font-size: 64px; font-weight: 800; line-height: 1.05; }
+    .date-sub { color: var(--primary); font-size: 18px; margin-top: 6px; }
+    .launchers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .launcher {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+      padding: 16px; cursor: pointer; text-align: left; color: var(--text);
+    }
+    .launcher:hover { border-color: var(--primary); }
+    .note-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px;
+    }
+    .note-row.done span.txt { text-decoration: line-through; color: var(--muted); }
+    .floating-hud-btn {
+      position: fixed; top: 12px; right: 12px; z-index: 40; display: none;
+    }
+    .floating-hud-btn.visible { display: block; }
+    .modal-backdrop {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: none;
+      align-items: center; justify-content: center; z-index: 50;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 18px;
+      width: min(900px, 92vw); max-height: 88vh; overflow-y: auto; padding: 24px;
+    }
+    .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+    .field label { font-size: 12px; color: var(--muted); }
+    .field input, .field select {
+      background: var(--bg); border: 1px solid var(--border); color: var(--text);
+      padding: 8px 10px; border-radius: 8px; font-size: 14px;
+    }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header id="hud" class="hud">
+      <div class="pills" id="screen-pills">
+        <span class="brand">IRIS</span>
+      </div>
+      <div class="controls">
+        <div class="mqtt-badge">
+          <span id="mqtt-dot" class="dot"></span>
+          <span id="mqtt-label">MQTT: …</span>
+        </div>
+        <button class="btn" id="btn-rotation">Pause</button>
+        <button class="btn" id="btn-reload">↻</button>
+        <button class="btn" id="btn-screens">Écrans</button>
+        <button class="btn" id="btn-settings">Réglages</button>
+        <button class="btn" id="btn-hide-hud">▲</button>
+      </div>
+    </header>
+
+    <div id="alert-banner" class="alert-banner">
+      <div>
+        <span id="alert-severity" class="alert-tag">CRITIQUE</span>
+        <strong id="alert-title">Incident</strong>
+        <span id="alert-meta" style="color: var(--muted); font-size: 13px; margin-left: 8px;"></span>
+        <div id="alert-message" style="margin-top: 4px; font-size: 14px;"></div>
+      </div>
+      <div class="row">
+        <button class="btn" id="btn-alert-ack">Acquitter</button>
+        <button class="btn ok" id="btn-alert-clear">Résolu</button>
+      </div>
+    </div>
+
+    <main id="stage" class="stage"></main>
+  </div>
+
+  <button id="btn-show-hud" class="btn floating-hud-btn">▼ HUD</button>
+
+  <div id="modal-screens" class="modal-backdrop">
+    <div class="modal">
+      <div class="row" style="justify-content: space-between; margin-bottom: 16px;">
+        <h2>Gestion des écrans</h2>
+        <button class="btn" onclick="closeModal('modal-screens')">Fermer</button>
+      </div>
+      <div id="screens-list"></div>
+      <hr style="border-color: var(--border); margin: 16px 0;" />
+      <h3 style="margin-bottom: 10px;">Ajouter / Modifier un écran</h3>
+      <div class="row">
+        <div class="field" style="flex:1"><label>ID</label><input id="scr-id" placeholder="o2-custom" /></div>
+        <div class="field" style="flex:2"><label>Nom</label><input id="scr-name" placeholder="OpenObserve Logs" /></div>
+        <div class="field" style="flex:1">
+          <label>Type</label>
+          <select id="scr-type">
+            <option value="OPENOBSERVE">OpenObserve</option>
+            <option value="GRAFANA">Grafana</option>
+            <option value="WEB">Web / URL</option>
+            <option value="ORG_OVERVIEW">Org — Hub</option>
+            <option value="ORG_NOTES">Org — Notes</option>
+            <option value="ORG_CLOCK">Org — Horloge</option>
+          </select>
+        </div>
+      </div>
+      <div class="field"><label>URL</label><input id="scr-url" placeholder="https://o2-openobserve.p.zacharie.org/web/dashboards" /></div>
+      <div class="row" style="margin-bottom: 12px;">
+        <label><input type="checkbox" id="scr-alert" /> Écran d'alerte par défaut</label>
+        <label><input type="checkbox" id="scr-enabled" checked /> Activé</label>
+      </div>
+      <button class="btn primary" id="btn-save-screen">Enregistrer l'écran</button>
+    </div>
+  </div>
+
+  <div id="modal-settings" class="modal-backdrop">
+    <div class="modal">
+      <div class="row" style="justify-content: space-between; margin-bottom: 16px;">
+        <h2>Réglages Iris</h2>
+        <button class="btn" onclick="closeModal('modal-settings')">Fermer</button>
+      </div>
+      <div class="row">
+        <div class="field" style="flex:2"><label>Broker MQTT Host</label><input id="cfg-host" /></div>
+        <div class="field" style="flex:1"><label>Port</label><input id="cfg-port" type="number" /></div>
+      </div>
+      <div class="row">
+        <div class="field" style="flex:1"><label>Device ID</label><input id="cfg-device" /></div>
+        <div class="field" style="flex:1"><label>Base Topic</label><input id="cfg-topic" /></div>
+        <div class="field" style="flex:1"><label>Rotation (sec)</label><input id="cfg-rot-sec" type="number" /></div>
+      </div>
+      <div class="row" style="margin-bottom: 16px;">
+        <label><input type="checkbox" id="cfg-mqtt-enabled" /> MQTT actif</label>
+        <label><input type="checkbox" id="cfg-rot-enabled" /> Rotation auto</label>
+      </div>
+      <div class="row" style="justify-content: space-between;">
+        <button class="btn danger" id="btn-sim-alert">Simuler un incident</button>
+        <button class="btn primary" id="btn-save-settings">Enregistrer</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

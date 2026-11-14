@@ -1,0 +1,9 @@
+{
+  "name": "Iris — Observabilité & Organisation",
+  "short_name": "Iris",
+  "start_url": "/",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#090d16",
+  "theme_color": "#090d16"
+}

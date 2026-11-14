@@ -1,0 +1,15 @@
+[package]
+name = "iris-infrastructure"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+iris-core = { path = "../iris-core" }
+iris-application = { path = "../iris-application" }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+rumqttc = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

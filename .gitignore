@@ -1,0 +1,15 @@
+# Rust / Cargo
+/target/
+**/*.rs.bk
+*.pdb
+
+# Local state & env
+iris_state.json
+.env
+.env.local
+
+# IDE & OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

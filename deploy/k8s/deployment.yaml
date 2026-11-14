@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: iris
+  namespace: iris
+  labels:
+    app: iris
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: iris
+  template:
+    metadata:
+      labels:
+        app: iris
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      containers:
+        - name: iris
+          image: ghcr.io/jzacharie/iris:latest
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: IRIS_HOST
+              value: "0.0.0.0"
+            - name: IRIS_PORT
+              value: "8080"
+            - name: IRIS_MQTT_HOST
+              value: "emqx.emqx.svc.cluster.local"
+            - name: IRIS_MQTT_PORT
+              value: "1883"
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          volumeMounts:
+            - name: iris-data
+              mountPath: /app/data
+      volumes:
+        - name: iris-data
+          emptyDir: {}
