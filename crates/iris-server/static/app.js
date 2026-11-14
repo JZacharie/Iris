@@ -49,6 +49,21 @@ function renderHud(snap) {
   dot.className = "dot " + snap.mqttState;
   document.getElementById("mqtt-label").textContent = `MQTT: ${snap.mqttState}`;
   document.getElementById("btn-rotation").textContent = snap.settings.rotationEnabled ? "Pause" : "Lecture";
+
+  const barthes = snap.barthesState || "DEGRE_ZERO";
+  const barthesMeta = {
+    DEGRE_ZERO: { label: "Degré zéro", desc: "Équilibre silencieux — flux nominal" },
+    STUDIUM: { label: "Studium", desc: "Attention calme — veille organisationnelle" },
+    CONNOTATION: { label: "Connotation", desc: "Signal faible — tension ressources ou quota" },
+    PRESENCE: { label: "Présence", desc: "En communication — Teams / Zoom actif" },
+    PUNCTUM: { label: "Punctum", desc: "Rupture critique — incident actif" }
+  }[barthes] || { label: "Degré zéro", desc: "" };
+  const pill = document.getElementById("barthes-pill");
+  if (pill) {
+    pill.className = `barthes-pill barthes-${barthes}`;
+    pill.textContent = barthesMeta.label;
+    pill.title = barthesMeta.desc;
+  }
 }
 
 function renderAlert(alert) {
@@ -87,9 +102,121 @@ function renderStage(snap) {
 
   lastRenderedKey = null;
   if (screen.type === "ORG_OVERVIEW") renderOrgOverview(stage, snap);
+  else if (screen.type === "ORG_STREAM_DECK") renderStreamDeck(stage, snap);
   else if (screen.type === "ORG_AGENDA") renderOrgAgenda(stage, snap);
   else if (screen.type === "ORG_NOTES") renderOrgNotes(stage, snap);
   else if (screen.type === "ORG_CLOCK") renderOrgClock(stage);
+}
+
+function renderStreamDeck(stage, snap) {
+  const pc = snap.pcTelemetry;
+  const buttons = snap.deckButtons || [];
+  const cpu = pc ? pc.cpuPercent : 0;
+  const ramPct = pc ? pc.ramPercent : 0;
+  const ramUsedGb = pc ? (pc.ramUsedMb / 1024).toFixed(1) : "0.0";
+  const ramTotalGb = pc ? (pc.ramTotalMb / 1024).toFixed(1) : "0.0";
+  const limit = pc?.antigravityTokensLimit || 2000000;
+  const used = pc?.antigravityTokensUsed || 0;
+  const remaining = Math.max(0, limit - used);
+  const quotaPct = Math.min(100, Math.round((remaining * 100) / limit));
+
+  stage.innerHTML = `
+    <div class="org-view">
+      <div class="row" style="justify-content:space-between;margin-bottom:16px;">
+        <div>
+          <h2>Stream Deck & Télémétrie PC</h2>
+          <div style="color:var(--muted);font-size:13px;">${pc ? `Poste : ${escapeHtml(pc.hostname)} • Uptime ${Math.floor(pc.uptimeSecs / 3600)}h` : "En attente de iris-pc-agent sur votre PC…"}</div>
+        </div>
+        <button class="btn" id="btn-toggle-deck-add">+ Ajouter une touche</button>
+      </div>
+
+      <div class="deck-telemetry">
+        <div class="metric-card">
+          <div style="color:var(--muted);font-size:12px;">CPU</div>
+          <div style="font-size:28px;font-weight:800;margin-top:4px;">${pc ? cpu + "%" : "—"}</div>
+          <div class="bar-track"><div class="bar-fill" style="width:${cpu}%;background:${cpu >= 85 ? "var(--crit)" : "var(--primary)"};"></div></div>
+        </div>
+        <div class="metric-card">
+          <div style="color:var(--muted);font-size:12px;">Mémoire RAM</div>
+          <div style="font-size:28px;font-weight:800;margin-top:4px;">${pc ? ramPct + "%" : "—"}</div>
+          <div style="font-size:12px;color:var(--muted);">${pc ? `${ramUsedGb} / ${ramTotalGb} Go` : "Hors ligne"}</div>
+          <div class="bar-track"><div class="bar-fill" style="width:${ramPct}%;background:${ramPct >= 85 ? "var(--crit)" : "var(--ok)"};"></div></div>
+        </div>
+        <div class="metric-card">
+          <div style="color:var(--muted);font-size:12px;">Quota Antigravity restant</div>
+          <div style="font-size:24px;font-weight:800;margin-top:4px;">${(remaining / 1000).toFixed(0)}k <span style="font-size:13px;color:var(--muted);">/ ${(limit / 1000).toFixed(0)}k</span></div>
+          <div style="font-size:12px;color:var(--primary);">${escapeHtml(pc?.antigravityModel || "Gemini 4 Hydrogen")}</div>
+          <div class="bar-track"><div class="bar-fill" style="width:${quotaPct}%;background:var(--primary);"></div></div>
+        </div>
+        <div class="metric-card">
+          <div style="color:var(--muted);font-size:12px;">Communication</div>
+          <div style="font-size:22px;font-weight:800;margin-top:6px;">${pc?.activeMeeting ? "🟢 " + escapeHtml(pc.activeMeeting) : "⚪ Veille"}</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:6px;">${snap.lastDeckAction ? "Dernière action : " + escapeHtml(snap.lastDeckAction.label) : "Prêt à exécuter"}</div>
+        </div>
+      </div>
+
+      <div id="deck-add-form" class="card" style="display:none;margin-bottom:16px;">
+        <div class="row">
+          <input id="dk-label" placeholder="Nom (ex: Daily Teams)" style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:8px;" />
+          <input id="dk-icon" placeholder="Icône (📞)" style="width:90px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:8px;" />
+          <select id="dk-kind" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:8px;">
+            <option value="JOIN_TEAMS">Rejoindre Teams</option>
+            <option value="JOIN_ZOOM">Rejoindre Zoom</option>
+            <option value="OPEN_URL">Ouvrir URL</option>
+            <option value="LAUNCH_APP">Lancer App</option>
+            <option value="MEDIA_TOGGLE">Média Play/Pause</option>
+            <option value="LOCK_SCREEN">Verrouiller PC</option>
+            <option value="SWITCH_IRIS_SCREEN">Changer Écran Iris</option>
+          </select>
+          <input id="dk-payload" placeholder="URL / Commande / Screen ID" style="flex:2;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:8px;" />
+          <button class="btn primary" id="btn-save-deck">Ajouter</button>
+        </div>
+      </div>
+
+      <div class="deck-grid" id="deck-grid"></div>
+    </div>
+  `;
+
+  document.getElementById("btn-toggle-deck-add").onclick = () => {
+    const form = document.getElementById("deck-add-form");
+    form.style.display = form.style.display === "none" ? "block" : "none";
+  };
+  document.getElementById("btn-save-deck").onclick = () => {
+    const label = document.getElementById("dk-label").value.trim();
+    const icon = document.getElementById("dk-icon").value.trim() || "⚡";
+    const kind = document.getElementById("dk-kind").value;
+    const payload = document.getElementById("dk-payload").value.trim();
+    if (!label) return;
+    api("/api/deck/buttons", "POST", {
+      id: `deck-${Date.now()}`,
+      label,
+      subtitle: kind,
+      icon,
+      color: "#38bdf8",
+      category: "Custom",
+      kind,
+      payload
+    });
+  };
+
+  const grid = document.getElementById("deck-grid");
+  buttons.forEach((btn) => {
+    const el = document.createElement("button");
+    el.className = "deck-tile";
+    el.style.borderTop = `3px solid ${btn.color || "#38bdf8"}`;
+    el.innerHTML = `
+      <div class="row" style="justify-content:space-between;width:100%;">
+        <span class="deck-icon">${escapeHtml(btn.icon || "⚡")}</span>
+        <span class="deck-cat">${escapeHtml(btn.category || "")}</span>
+      </div>
+      <div>
+        <div style="font-weight:700;font-size:15px;">${escapeHtml(btn.label)}</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px;">${escapeHtml(btn.subtitle || "")}</div>
+      </div>
+    `;
+    el.onclick = () => api("/api/deck/trigger", "POST", { buttonId: btn.id });
+    grid.appendChild(el);
+  });
 }
 
 function renderWeatherCard(weather) {

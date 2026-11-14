@@ -1,0 +1,16 @@
+[package]
+name = "iris-pc-agent"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+iris-core = { path = "../iris-core" }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sysinfo = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

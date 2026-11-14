@@ -10,6 +10,7 @@ pub enum ScreenType {
     OrgNotes,
     OrgClock,
     OrgAgenda,
+    OrgStreamDeck,
 }
 
 impl ScreenType {
@@ -26,6 +27,7 @@ impl ScreenType {
             Self::OrgNotes => "Organisation — Notes",
             Self::OrgClock => "Organisation — Horloge",
             Self::OrgAgenda => "Organisation — Planning & Mails",
+            Self::OrgStreamDeck => "Stream Deck & PC",
         }
     }
 }
@@ -289,6 +291,104 @@ pub struct OrgFeedData {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum BarthesState {
+    /// Équilibre silencieux : système nominal, aucune friction
+    DegreZero,
+    /// Attention calme : lecture organisationnelle et veille active
+    Studium,
+    /// Signal faible : charge CPU/RAM élevée ou quota Antigravity bas
+    Connotation,
+    /// En communication : appel Teams ou Zoom détecté sur le poste
+    Presence,
+    /// Saillance / Rupture : incident critique qui perce l'écran
+    Punctum,
+}
+
+impl BarthesState {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::DegreZero => "Degré zéro",
+            Self::Studium => "Studium",
+            Self::Connotation => "Connotation",
+            Self::Presence => "Présence",
+            Self::Punctum => "Punctum",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::DegreZero => "Équilibre silencieux — flux nominal",
+            Self::Studium => "Attention calme — veille organisationnelle",
+            Self::Connotation => "Signal faible — tension ressources ou quota",
+            Self::Presence => "En communication — Teams / Zoom actif",
+            Self::Punctum => "Rupture critique — incident actif",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DeckActionKind {
+    JoinTeams,
+    JoinZoom,
+    OpenUrl,
+    LaunchApp,
+    MediaToggle,
+    LockScreen,
+    SwitchIrisScreen,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeckButton {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub subtitle: String,
+    #[serde(default)]
+    pub icon: String,
+    #[serde(default = "default_deck_color")]
+    pub color: String,
+    #[serde(default = "default_category")]
+    pub category: String,
+    pub kind: DeckActionKind,
+    #[serde(default)]
+    pub payload: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeckActionEvent {
+    pub id: String,
+    pub button_id: String,
+    pub label: String,
+    pub kind: DeckActionKind,
+    pub payload: String,
+    pub requested_at_epoch_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PcTelemetry {
+    pub hostname: String,
+    pub cpu_percent: u32,
+    pub ram_used_mb: u64,
+    pub ram_total_mb: u64,
+    pub ram_percent: u32,
+    pub uptime_secs: u64,
+    #[serde(default)]
+    pub active_meeting: Option<String>,
+    #[serde(default)]
+    pub antigravity_tokens_used: u64,
+    #[serde(default = "default_antigravity_limit")]
+    pub antigravity_tokens_limit: u64,
+    #[serde(default)]
+    pub antigravity_model: String,
+    pub updated_at_epoch_ms: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MqttConnectionState {
     Disconnected,
     Connecting,
@@ -305,6 +405,8 @@ pub struct IrisPersistedState {
     pub mails: Vec<OrgMail>,
     #[serde(default)]
     pub events: Vec<OrgEvent>,
+    #[serde(default)]
+    pub deck_buttons: Vec<DeckButton>,
     pub settings: IrisSettings,
     pub active_screen_id: Option<String>,
 }
@@ -320,10 +422,21 @@ pub struct IrisSnapshot {
     pub active_alert: Option<ActiveAlert>,
     pub notes: Vec<OrgNote>,
     pub org: OrgFeedData,
+    pub deck_buttons: Vec<DeckButton>,
+    pub pc_telemetry: Option<PcTelemetry>,
+    pub last_deck_action: Option<DeckActionEvent>,
+    pub barthes_state: BarthesState,
     pub settings: IrisSettings,
     pub mqtt_state: MqttConnectionState,
     pub mqtt_status_detail: String,
     pub reload_counter: u64,
+}
+
+fn default_deck_color() -> String {
+    "#38bdf8".to_string()
+}
+fn default_antigravity_limit() -> u64 {
+    2_000_000
 }
 
 fn default_weather_city() -> String {

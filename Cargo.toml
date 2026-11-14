@@ -4,6 +4,7 @@ members = [
     "crates/iris-application",
     "crates/iris-infrastructure",
     "crates/iris-server",
+    "crates/iris-pc-agent",
 ]
 resolver = "2"
 
@@ -32,6 +33,7 @@ mime_guess = "2.0"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.11", features = ["v4", "serde"] }
 prometheus = "0.13"
+sysinfo = "0.33"
 
 [profile.release]
 opt-level = "z"

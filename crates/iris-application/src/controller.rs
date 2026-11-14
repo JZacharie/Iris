@@ -3,9 +3,10 @@ use std::time::Duration;
 
 use chrono::Utc;
 use iris_core::{
-    ActiveAlert, DashboardUrlFormatter, DisplayScreen, IrisCommand, IrisPersistedState,
-    IrisSettings, IrisSnapshot, MqttCommandParser, MqttConnectionState, OrgEvent, OrgFeedData,
-    OrgMail, OrgNote, Result, WeatherForecast,
+    ActiveAlert, BarthesState, DashboardUrlFormatter, DeckActionEvent, DeckActionKind, DeckButton,
+    DisplayScreen, IrisCommand, IrisPersistedState, IrisSettings, IrisSnapshot, MqttCommandParser,
+    MqttConnectionState, OrgEvent, OrgFeedData, OrgMail, OrgNote, PcTelemetry, Result, ScreenType,
+    WeatherForecast,
 };
 use tokio::sync::{broadcast, RwLock};
 use tracing::{info, warn};
@@ -23,6 +24,9 @@ struct InnerState {
     weather: Option<WeatherForecast>,
     mails: Vec<OrgMail>,
     events: Vec<OrgEvent>,
+    deck_buttons: Vec<DeckButton>,
+    pc_telemetry: Option<PcTelemetry>,
+    last_deck_action: Option<DeckActionEvent>,
     settings: IrisSettings,
     mqtt_state: MqttConnectionState,
     mqtt_status_detail: String,
@@ -54,6 +58,9 @@ impl InnerState {
             weather: None,
             mails: persisted.mails,
             events: persisted.events,
+            deck_buttons: persisted.deck_buttons,
+            pc_telemetry: None,
+            last_deck_action: None,
             settings: persisted.settings,
             mqtt_state: MqttConnectionState::Disconnected,
             mqtt_status_detail: String::new(),
@@ -72,6 +79,7 @@ impl InnerState {
                 .filter(|e| e.source != "ical")
                 .cloned()
                 .collect(),
+            deck_buttons: self.deck_buttons.clone(),
             settings: self.settings.clone(),
             active_screen_id: self.active_screen.as_ref().map(|s| s.id.clone()),
         }
@@ -87,6 +95,12 @@ impl InnerState {
             .map(DashboardUrlFormatter::format_screen)
             .unwrap_or_default();
 
+        let barthes_state = compute_barthes_state(
+            self.active_alert.as_ref(),
+            self.pc_telemetry.as_ref(),
+            displayed.as_ref(),
+        );
+
         IrisSnapshot {
             screens: self.screens.clone(),
             active_screen: self.active_screen.clone(),
@@ -100,12 +114,48 @@ impl InnerState {
                 mails: self.mails.clone(),
                 events: self.events.clone(),
             },
+            deck_buttons: self.deck_buttons.clone(),
+            pc_telemetry: self.pc_telemetry.clone(),
+            last_deck_action: self.last_deck_action.clone(),
+            barthes_state,
             settings: self.settings.clone(),
             mqtt_state: self.mqtt_state,
             mqtt_status_detail: self.mqtt_status_detail.clone(),
             reload_counter: self.reload_counter,
         }
     }
+}
+
+fn compute_barthes_state(
+    alert: Option<&ActiveAlert>,
+    pc: Option<&PcTelemetry>,
+    displayed: Option<&DisplayScreen>,
+) -> BarthesState {
+    if alert.is_some_and(|a| !a.acknowledged) {
+        return BarthesState::Punctum;
+    }
+    if let Some(telemetry) = pc {
+        if telemetry.active_meeting.is_some() {
+            return BarthesState::Presence;
+        }
+        let low_quota = telemetry.antigravity_tokens_limit > 0
+            && telemetry.antigravity_tokens_used * 100 / telemetry.antigravity_tokens_limit >= 85;
+        if telemetry.cpu_percent >= 85 || telemetry.ram_percent >= 85 || low_quota {
+            return BarthesState::Connotation;
+        }
+    }
+    if displayed.is_some_and(|s| {
+        matches!(
+            s.screen_type,
+            ScreenType::OrgOverview
+                | ScreenType::OrgAgenda
+                | ScreenType::OrgNotes
+                | ScreenType::OrgStreamDeck
+        )
+    }) {
+        return BarthesState::Studium;
+    }
+    BarthesState::DegreZero
 }
 
 /// Deep module orchestrating playlist rotation, incident/alert overrides,
@@ -115,17 +165,95 @@ pub struct IrisController {
     repo: Arc<dyn StateRepository>,
     mqtt_publisher: RwLock<Option<Arc<dyn MqttPublisher>>>,
     updates_tx: broadcast::Sender<IrisSnapshot>,
+    deck_actions_tx: broadcast::Sender<DeckActionEvent>,
 }
 
 impl IrisController {
     pub fn new(initial: IrisPersistedState, repo: Arc<dyn StateRepository>) -> Arc<Self> {
         let (updates_tx, _) = broadcast::channel(64);
+        let (deck_actions_tx, _) = broadcast::channel(64);
         Arc::new(Self {
             inner: RwLock::new(InnerState::from_persisted(initial)),
             repo,
             mqtt_publisher: RwLock::new(None),
             updates_tx,
+            deck_actions_tx,
         })
+    }
+
+    pub fn subscribe_deck_actions(&self) -> broadcast::Receiver<DeckActionEvent> {
+        self.deck_actions_tx.subscribe()
+    }
+
+    pub async fn update_pc_telemetry(&self, telemetry: PcTelemetry) -> IrisSnapshot {
+        let snapshot = {
+            let mut state = self.inner.write().await;
+            state.pc_telemetry = Some(telemetry);
+            state.snapshot()
+        };
+        let _ = self.updates_tx.send(snapshot.clone());
+        snapshot
+    }
+
+    pub async fn trigger_deck_button(&self, button_id: &str) -> Result<IrisSnapshot> {
+        let button = {
+            let state = self.inner.read().await;
+            state
+                .deck_buttons
+                .iter()
+                .find(|b| b.id == button_id)
+                .cloned()
+        };
+        let Some(btn) = button else {
+            return Err(iris_core::IrisError::ScreenNotFound(button_id.to_string()));
+        };
+
+        if btn.kind == DeckActionKind::SwitchIrisScreen {
+            return self.select_screen(&btn.payload).await;
+        }
+
+        let event = DeckActionEvent {
+            id: Uuid::new_v4().to_string(),
+            button_id: btn.id.clone(),
+            label: btn.label.clone(),
+            kind: btn.kind,
+            payload: btn.payload.clone(),
+            requested_at_epoch_ms: Utc::now().timestamp_millis(),
+        };
+
+        let snapshot = {
+            let mut state = self.inner.write().await;
+            state.last_deck_action = Some(event.clone());
+            state.snapshot()
+        };
+
+        let _ = self.deck_actions_tx.send(event);
+        self.broadcast_only(&snapshot).await;
+        Ok(snapshot)
+    }
+
+    pub async fn upsert_deck_button(&self, button: DeckButton) -> IrisSnapshot {
+        let (snapshot, persisted) = {
+            let mut state = self.inner.write().await;
+            if let Some(slot) = state.deck_buttons.iter_mut().find(|b| b.id == button.id) {
+                *slot = button;
+            } else {
+                state.deck_buttons.push(button);
+            }
+            (state.snapshot(), state.to_persisted())
+        };
+        self.persist_and_broadcast(&persisted, &snapshot).await;
+        snapshot
+    }
+
+    pub async fn delete_deck_button(&self, button_id: &str) -> IrisSnapshot {
+        let (snapshot, persisted) = {
+            let mut state = self.inner.write().await;
+            state.deck_buttons.retain(|b| b.id != button_id);
+            (state.snapshot(), state.to_persisted())
+        };
+        self.persist_and_broadcast(&persisted, &snapshot).await;
+        snapshot
     }
 
     pub async fn set_mqtt_publisher(&self, publisher: Arc<dyn MqttPublisher>) {
@@ -693,6 +821,7 @@ mod tests {
             notes: vec![],
             mails: vec![],
             events: vec![],
+            deck_buttons: vec![],
             settings: IrisSettings::default(),
             active_screen_id: Some("org-overview".to_string()),
         }

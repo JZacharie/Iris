@@ -9,7 +9,8 @@ use axum::{Json, Router};
 use chrono::Utc;
 use iris_application::IrisController;
 use iris_core::{
-    ActiveAlert, AlertSeverity, DisplayScreen, IrisSettings, IrisSnapshot, OrgEvent, OrgMail,
+    ActiveAlert, AlertSeverity, DeckButton, DisplayScreen, IrisSettings, IrisSnapshot, OrgEvent,
+    OrgMail, PcTelemetry,
 };
 use iris_infrastructure::RumqttcAdapter;
 use prometheus::{Encoder, TextEncoder};
@@ -46,9 +47,14 @@ pub fn api_router(state: AppState) -> Router {
         .route("/api/org/mails/{id}", delete(delete_mail))
         .route("/api/org/events", post(upsert_event))
         .route("/api/org/events/{id}", delete(delete_event))
+        .route("/api/pc/telemetry", post(update_pc_telemetry))
+        .route("/api/deck/trigger", post(trigger_deck_button))
+        .route("/api/deck/buttons", post(upsert_deck_button))
+        .route("/api/deck/buttons/{id}", delete(delete_deck_button))
         .route("/api/settings", post(update_settings))
         .route("/api/reload", post(request_reload))
         .route("/ws", get(ws_handler))
+        .route("/ws/pc", get(ws_pc_handler))
         .with_state(state)
 }
 
@@ -385,6 +391,77 @@ async fn upsert_event(
 
 async fn delete_event(State(state): State<AppState>, Path(id): Path<String>) -> Json<IrisSnapshot> {
     Json(state.controller.delete_event(&id).await)
+}
+
+async fn update_pc_telemetry(
+    State(state): State<AppState>,
+    Json(telemetry): Json<PcTelemetry>,
+) -> Json<IrisSnapshot> {
+    Json(state.controller.update_pc_telemetry(telemetry).await)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriggerDeckReq {
+    button_id: String,
+}
+
+async fn trigger_deck_button(
+    State(state): State<AppState>,
+    Json(req): Json<TriggerDeckReq>,
+) -> impl IntoResponse {
+    match state.controller.trigger_deck_button(&req.button_id).await {
+        Ok(snap) => (StatusCode::OK, Json(snap)).into_response(),
+        Err(err) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn upsert_deck_button(
+    State(state): State<AppState>,
+    Json(button): Json<DeckButton>,
+) -> Json<IrisSnapshot> {
+    Json(state.controller.upsert_deck_button(button).await)
+}
+
+async fn delete_deck_button(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Json<IrisSnapshot> {
+    Json(state.controller.delete_deck_button(&id).await)
+}
+
+async fn ws_pc_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_ws_pc(socket, state))
+}
+
+async fn handle_ws_pc(mut socket: WebSocket, state: AppState) {
+    let mut rx = state.controller.subscribe_deck_actions();
+    loop {
+        tokio::select! {
+            msg = rx.recv() => {
+                match msg {
+                    Ok(action) => {
+                        if let Ok(json) = serde_json::to_string(&action) {
+                            if socket.send(Message::Text(json.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            incoming = socket.recv() => {
+                if incoming.is_none() || matches!(incoming, Some(Ok(Message::Close(_)))) {
+                    break;
+                }
+            }
+        }
+    }
 }
 
 async fn update_settings(

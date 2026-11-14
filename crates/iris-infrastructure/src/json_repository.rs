@@ -4,7 +4,8 @@ use async_trait::async_trait;
 use chrono::Utc;
 use iris_application::StateRepository;
 use iris_core::{
-    DisplayScreen, IrisError, IrisPersistedState, IrisSettings, OrgNote, Result, ScreenType,
+    DeckActionKind, DeckButton, DisplayScreen, IrisError, IrisPersistedState, IrisSettings,
+    OrgNote, Result, ScreenType,
 };
 use tracing::warn;
 
@@ -23,9 +24,95 @@ impl JsonFileRepository {
             notes: Self::default_notes(),
             mails: vec![],
             events: vec![],
+            deck_buttons: Self::default_deck_buttons(),
             settings: IrisSettings::default(),
             active_screen_id: Some("org-overview".to_string()),
         }
+    }
+
+    pub fn default_deck_buttons() -> Vec<DeckButton> {
+        vec![
+            DeckButton {
+                id: "deck-teams".to_string(),
+                label: "Teams".to_string(),
+                subtitle: "Rejoindre / Ouvrir".to_string(),
+                icon: "📞".to_string(),
+                color: "#6366f1".to_string(),
+                category: "Communication".to_string(),
+                kind: DeckActionKind::JoinTeams,
+                payload: "msteams://".to_string(),
+            },
+            DeckButton {
+                id: "deck-zoom".to_string(),
+                label: "Zoom".to_string(),
+                subtitle: "Réunion en cours".to_string(),
+                icon: "🎥".to_string(),
+                color: "#0ea5e9".to_string(),
+                category: "Communication".to_string(),
+                kind: DeckActionKind::JoinZoom,
+                payload: "zoommtg://".to_string(),
+            },
+            DeckButton {
+                id: "deck-openobserve".to_string(),
+                label: "OpenObserve".to_string(),
+                subtitle: "Logs & Traces".to_string(),
+                icon: "🔭".to_string(),
+                color: "#06b6d4".to_string(),
+                category: "Observabilité".to_string(),
+                kind: DeckActionKind::OpenUrl,
+                payload: "https://o2-openobserve.p.zacharie.org".to_string(),
+            },
+            DeckButton {
+                id: "deck-grafana".to_string(),
+                label: "Grafana".to_string(),
+                subtitle: "Cluster jo3".to_string(),
+                icon: "📊".to_string(),
+                color: "#f97316".to_string(),
+                category: "Observabilité".to_string(),
+                kind: DeckActionKind::OpenUrl,
+                payload: "https://grafana.zacharie.org".to_string(),
+            },
+            DeckButton {
+                id: "deck-code".to_string(),
+                label: "VS Code".to_string(),
+                subtitle: "Workspace PC".to_string(),
+                icon: "💻".to_string(),
+                color: "#38bdf8".to_string(),
+                category: "Productivité".to_string(),
+                kind: DeckActionKind::LaunchApp,
+                payload: "code".to_string(),
+            },
+            DeckButton {
+                id: "deck-term".to_string(),
+                label: "Terminal".to_string(),
+                subtitle: "Windows Terminal".to_string(),
+                icon: "⌨️".to_string(),
+                color: "#22c55e".to_string(),
+                category: "Productivité".to_string(),
+                kind: DeckActionKind::LaunchApp,
+                payload: "wt".to_string(),
+            },
+            DeckButton {
+                id: "deck-media".to_string(),
+                label: "Média".to_string(),
+                subtitle: "Play / Pause".to_string(),
+                icon: "⏯️".to_string(),
+                color: "#a855f7".to_string(),
+                category: "Système".to_string(),
+                kind: DeckActionKind::MediaToggle,
+                payload: String::new(),
+            },
+            DeckButton {
+                id: "deck-lock".to_string(),
+                label: "Verrouiller".to_string(),
+                subtitle: "Session PC".to_string(),
+                icon: "🔒".to_string(),
+                color: "#ef4444".to_string(),
+                category: "Système".to_string(),
+                kind: DeckActionKind::LockScreen,
+                payload: String::new(),
+            },
+        ]
     }
 
     pub fn default_screens() -> Vec<DisplayScreen> {
@@ -57,6 +144,16 @@ impl JsonFileRepository {
                 url: "https://grafana.zacharie.org/d/".to_string(),
                 kiosk_mode: true,
                 auto_refresh_seconds: 30,
+                enabled: true,
+                is_alert_target: false,
+            },
+            DisplayScreen {
+                id: "org-stream-deck".to_string(),
+                name: "Stream Deck".to_string(),
+                screen_type: ScreenType::OrgStreamDeck,
+                url: String::new(),
+                kiosk_mode: true,
+                auto_refresh_seconds: 0,
                 enabled: true,
                 is_alert_target: false,
             },
@@ -132,6 +229,9 @@ impl StateRepository for JsonFileRepository {
             Ok(mut state) => {
                 if state.screens.is_empty() {
                     state.screens = Self::default_screens();
+                }
+                if state.deck_buttons.is_empty() {
+                    state.deck_buttons = Self::default_deck_buttons();
                 }
                 Ok(state)
             }
