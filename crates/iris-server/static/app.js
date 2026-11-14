@@ -87,15 +87,56 @@ function renderStage(snap) {
 
   lastRenderedKey = null;
   if (screen.type === "ORG_OVERVIEW") renderOrgOverview(stage, snap);
+  else if (screen.type === "ORG_AGENDA") renderOrgAgenda(stage, snap);
   else if (screen.type === "ORG_NOTES") renderOrgNotes(stage, snap);
   else if (screen.type === "ORG_CLOCK") renderOrgClock(stage);
+}
+
+function renderWeatherCard(weather) {
+  if (!weather) {
+    return `<div class="card"><h3>Météo Lyon (3 jours)</h3><p style="color:var(--muted);margin-top:8px;">Chargement en cours…</p></div>`;
+  }
+  const daysHtml = (weather.days || []).map((d, idx) => {
+    const dayLabel = idx === 0 ? "Aujourd'hui" : idx === 1 ? "Demain" : formatShortDate(d.date);
+    return `
+      <div style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:12px;text-align:center;">
+        <div style="font-size:12px;color:var(--muted);">${escapeHtml(dayLabel)}</div>
+        <div style="font-size:28px;margin:4px 0;">${d.icon}</div>
+        <div style="font-weight:700;">${d.tempMinC}° / ${d.tempMaxC}°C</div>
+        <div style="font-size:12px;color:var(--primary);">${escapeHtml(d.label)}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;">💧 ${d.precipProbPct}% · 💨 ${d.windMaxKmh} km/h</div>
+      </div>
+    `;
+  }).join("");
+
+  return `
+    <div class="card">
+      <div class="row" style="justify-content:space-between;margin-bottom:10px;">
+        <h3>${weather.currentIcon} Météo ${escapeHtml(weather.city)} — ${weather.currentTempC}°C</h3>
+        <span style="font-size:12px;color:var(--primary);">${escapeHtml(weather.currentLabel)} • 3 jours</span>
+      </div>
+      <div class="row" style="align-items:stretch;">${daysHtml}</div>
+    </div>
+  `;
+}
+
+function formatShortDate(iso) {
+  try {
+    const [y, m, d] = iso.split("-").map(Number);
+    const dt = new Date(y, m - 1, d);
+    return dt.toLocaleDateString("fr-FR", { weekday: "short", day: "numeric", month: "short" });
+  } catch (_) {
+    return iso;
+  }
 }
 
 function renderOrgOverview(stage, snap) {
   const now = new Date();
   const timeStr = now.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
   const dateStr = now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-  const notes = snap.notes.filter((n) => !n.done).slice(0, 5);
+  const notes = snap.notes.filter((n) => !n.done).slice(0, 4);
+  const mails = (snap.org?.mails || []).slice(0, 4);
+  const events = (snap.org?.events || []).slice(0, 4);
 
   stage.innerHTML = `
     <div class="org-view">
@@ -105,24 +146,31 @@ function renderOrgOverview(stage, snap) {
             <div class="clock-big" id="hub-clock">${timeStr}</div>
             <div class="date-sub">${dateStr}</div>
           </div>
+          ${renderWeatherCard(snap.org?.weather)}
           <div class="card">
-            <h3>Pilotage MQTT</h3>
-            <p style="margin-top:8px;">État : <strong>${snap.mqttState}</strong></p>
-            <p style="color:var(--muted); font-size:13px;">Topic : ${snap.settings.mqtt.baseTopic}/${snap.settings.mqtt.deviceId}/command/#</p>
-          </div>
-          <div class="card">
-            <h3>Incidents & Rotation</h3>
-            <p style="margin-top:8px;">${snap.activeAlert ? "⚠️ Incident : " + snap.activeAlert.title : "✅ Nominal — aucun incident"}</p>
-            <p style="color:var(--muted); font-size:13px;">Rotation : ${snap.settings.rotationEnabled ? snap.settings.rotationIntervalSeconds + "s" : "En pause"}</p>
+            <h3>Pilotage MQTT & Incidents</h3>
+            <p style="margin-top:8px;">MQTT : <strong>${snap.mqttState}</strong> • ${snap.activeAlert ? "⚠️ " + escapeHtml(snap.activeAlert.title) : "✅ Nominal"}</p>
+            <p style="color:var(--muted); font-size:12px;">Topic : ${snap.settings.mqtt.baseTopic}/${snap.settings.mqtt.deviceId}/command/#</p>
           </div>
         </div>
         <div class="col">
-          <h3>Écrans de suivi & outils</h3>
           <div class="launchers" id="hub-launchers"></div>
           <div class="card">
-            <h3>Notes prioritaires</h3>
-            <div style="margin-top:10px;">
-              ${notes.length ? notes.map((n) => `<div style="margin-bottom:6px;">${n.pinned ? "📌 " : "• "}${escapeHtml(n.text)} <span style="color:var(--primary);font-size:12px;">(${escapeHtml(n.category)})</span></div>`).join("") : "<span style='color:var(--muted)'>Aucune tâche en attente.</span>"}
+            <h3>📧 Mails du jour (${mails.length})</h3>
+            <div style="margin-top:8px;">
+              ${mails.length ? mails.map((m) => `<div style="margin-bottom:6px;"><strong>${escapeHtml(m.sender)}</strong> — ${escapeHtml(m.subject)} <span style="color:var(--muted);font-size:12px;">${escapeHtml(m.receivedAt)}</span></div>`).join("") : "<span style='color:var(--muted)'>Aucun mail du jour.</span>"}
+            </div>
+          </div>
+          <div class="card">
+            <h3>📅 Planning de la semaine (${events.length})</h3>
+            <div style="margin-top:8px;">
+              ${events.length ? events.map((e) => `<div style="margin-bottom:6px;"><span style="color:var(--primary);font-weight:600;">${escapeHtml(formatShortDate(e.date))} ${escapeHtml(e.startTime)}</span> — ${escapeHtml(e.title)}</div>`).join("") : "<span style='color:var(--muted)'>Aucun événement configuré (ajoutez une URL .ics dans Réglages).</span>"}
+            </div>
+          </div>
+          <div class="card">
+            <h3>📌 Notes prioritaires</h3>
+            <div style="margin-top:8px;">
+              ${notes.length ? notes.map((n) => `<div style="margin-bottom:4px;">${n.pinned ? "📌 " : "• "}${escapeHtml(n.text)}</div>`).join("") : "<span style='color:var(--muted)'>Aucune tâche en attente.</span>"}
             </div>
           </div>
         </div>
@@ -137,6 +185,76 @@ function renderOrgOverview(stage, snap) {
     btn.onclick = () => api("/api/screen/select", "POST", { target: s.id });
     launchers.appendChild(btn);
   });
+}
+
+function renderOrgAgenda(stage, snap) {
+  const mails = snap.org?.mails || [];
+  const events = snap.org?.events || [];
+
+  stage.innerHTML = `
+    <div class="org-view">
+      <div class="row" style="justify-content:space-between;margin-bottom:16px;">
+        <h2>Planning de la semaine & Mails du jour</h2>
+        <button class="btn primary" id="btn-org-refresh">↻ Actualiser Météo & iCal</button>
+      </div>
+      ${renderWeatherCard(snap.org?.weather)}
+      <div class="grid-2" style="margin-top:16px;height:auto;">
+        <div class="col">
+          <div class="card">
+            <h3 style="margin-bottom:10px;">📅 Planning de la semaine</h3>
+            <div class="row" style="margin-bottom:12px;">
+              <input id="evt-title" placeholder="Événement…" style="flex:2;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:8px;" />
+              <input id="evt-date" type="date" value="${new Date().toISOString().slice(0, 10)}" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:8px;" />
+              <input id="evt-time" placeholder="09:00" style="width:72px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:8px;" />
+              <button class="btn primary" id="btn-add-evt">+</button>
+            </div>
+            ${events.length ? events.map((e) => `
+              <div class="note-row">
+                <div>
+                  <strong style="color:var(--primary);">${escapeHtml(formatShortDate(e.date))} ${escapeHtml(e.startTime)}${e.endTime ? "-" + escapeHtml(e.endTime) : ""}</strong>
+                  <div>${escapeHtml(e.title)} ${e.location ? `<span style="color:var(--muted);font-size:12px;">(${escapeHtml(e.location)})</span>` : ""}</div>
+                </div>
+                ${e.source !== "ical" ? `<button class="btn danger" onclick="api('/api/org/events/${encodeURIComponent(e.id)}','DELETE')">Suppr.</button>` : `<span style="font-size:11px;color:var(--muted);">iCal</span>`}
+              </div>
+            `).join("") : "<p style='color:var(--muted)'>Aucun événement cette semaine.</p>"}
+          </div>
+        </div>
+        <div class="col">
+          <div class="card">
+            <h3 style="margin-bottom:10px;">📧 Mails du jour</h3>
+            <div class="row" style="margin-bottom:12px;">
+              <input id="mail-sender" placeholder="Expéditeur" style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:8px;" />
+              <input id="mail-subject" placeholder="Objet du mail…" style="flex:2;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:8px;" />
+              <button class="btn primary" id="btn-add-mail">+</button>
+            </div>
+            ${mails.length ? mails.map((m) => `
+              <div class="note-row">
+                <div>
+                  <div><strong>${escapeHtml(m.sender)}</strong> <span style="color:var(--muted);font-size:12px;">• ${escapeHtml(m.receivedAt)}</span></div>
+                  <div>${m.important ? "⭐ " : ""}${escapeHtml(m.subject)}</div>
+                  ${m.snippet ? `<div style="color:var(--muted);font-size:12px;">${escapeHtml(m.snippet)}</div>` : ""}
+                </div>
+                <button class="btn danger" onclick="api('/api/org/mails/${encodeURIComponent(m.id)}','DELETE')">Suppr.</button>
+              </div>
+            `).join("") : "<p style='color:var(--muted)'>Aucun mail du jour.</p>"}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.getElementById("btn-org-refresh").onclick = () => api("/api/org/refresh", "POST");
+  document.getElementById("btn-add-evt").onclick = () => {
+    const title = document.getElementById("evt-title").value.trim();
+    const date = document.getElementById("evt-date").value;
+    const startTime = document.getElementById("evt-time").value.trim();
+    if (title && date) api("/api/org/events", "POST", { title, date, startTime });
+  };
+  document.getElementById("btn-add-mail").onclick = () => {
+    const sender = document.getElementById("mail-sender").value.trim() || "Expéditeur";
+    const subject = document.getElementById("mail-subject").value.trim();
+    if (subject) api("/api/org/mails", "POST", { sender, subject });
+  };
 }
 
 function renderOrgNotes(stage, snap) {
@@ -242,6 +360,8 @@ document.getElementById("btn-settings").onclick = () => {
   document.getElementById("cfg-device").value = s.mqtt.deviceId;
   document.getElementById("cfg-topic").value = s.mqtt.baseTopic;
   document.getElementById("cfg-rot-sec").value = s.rotationIntervalSeconds;
+  document.getElementById("cfg-weather-city").value = s.org?.weatherCity || "Lyon";
+  document.getElementById("cfg-ical-url").value = s.org?.icalUrl || "";
   document.getElementById("cfg-mqtt-enabled").checked = s.mqtt.enabled;
   document.getElementById("cfg-rot-enabled").checked = s.rotationEnabled;
   document.getElementById("modal-settings").classList.add("open");
@@ -257,6 +377,9 @@ document.getElementById("btn-save-settings").onclick = () => {
   s.mqtt.enabled = document.getElementById("cfg-mqtt-enabled").checked;
   s.rotationEnabled = document.getElementById("cfg-rot-enabled").checked;
   s.rotationIntervalSeconds = parseInt(document.getElementById("cfg-rot-sec").value, 10) || 45;
+  s.org = s.org || { weatherCity: "Lyon", weatherLat: "45.7640", weatherLon: "4.8357", icalUrl: "" };
+  s.org.weatherCity = document.getElementById("cfg-weather-city").value.trim() || "Lyon";
+  s.org.icalUrl = document.getElementById("cfg-ical-url").value.trim();
   api("/api/settings", "POST", s);
   closeModal("modal-settings");
 };

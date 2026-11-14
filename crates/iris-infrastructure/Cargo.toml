@@ -9,6 +9,7 @@ iris-application = { path = "../iris-application" }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 rumqttc = { workspace = true }
+reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

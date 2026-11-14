@@ -8,7 +8,9 @@ use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use chrono::Utc;
 use iris_application::IrisController;
-use iris_core::{ActiveAlert, AlertSeverity, DisplayScreen, IrisSettings, IrisSnapshot};
+use iris_core::{
+    ActiveAlert, AlertSeverity, DisplayScreen, IrisSettings, IrisSnapshot, OrgEvent, OrgMail,
+};
 use iris_infrastructure::RumqttcAdapter;
 use prometheus::{Encoder, TextEncoder};
 use serde::Deserialize;
@@ -39,6 +41,11 @@ pub fn api_router(state: AppState) -> Router {
         .route("/api/notes", post(upsert_note))
         .route("/api/notes/{id}/toggle", post(toggle_note))
         .route("/api/notes/{id}", delete(delete_note))
+        .route("/api/org/refresh", post(refresh_org))
+        .route("/api/org/mails", post(upsert_mail))
+        .route("/api/org/mails/{id}", delete(delete_mail))
+        .route("/api/org/events", post(upsert_event))
+        .route("/api/org/events/{id}", delete(delete_event))
         .route("/api/settings", post(update_settings))
         .route("/api/reload", post(request_reload))
         .route("/ws", get(ws_handler))
@@ -297,12 +304,96 @@ async fn delete_note(State(state): State<AppState>, Path(id): Path<String>) -> J
     Json(state.controller.delete_note(&id).await)
 }
 
+async fn refresh_org(State(state): State<AppState>) -> Json<IrisSnapshot> {
+    crate::org_sync::refresh_org_now(Arc::clone(&state.controller)).await;
+    Json(state.controller.snapshot().await)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpsertMailReq {
+    id: Option<String>,
+    sender: String,
+    subject: String,
+    #[serde(default)]
+    snippet: String,
+    #[serde(default)]
+    received_at: String,
+    #[serde(default = "default_true")]
+    unread: bool,
+    #[serde(default)]
+    important: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+async fn upsert_mail(
+    State(state): State<AppState>,
+    Json(req): Json<UpsertMailReq>,
+) -> Json<IrisSnapshot> {
+    let mail = OrgMail {
+        id: req.id.unwrap_or_else(|| format!("mail-{}", Uuid::new_v4())),
+        sender: req.sender,
+        subject: req.subject,
+        snippet: req.snippet,
+        received_at: if req.received_at.is_empty() {
+            Utc::now().format("%H:%M").to_string()
+        } else {
+            req.received_at
+        },
+        unread: req.unread,
+        important: req.important,
+    };
+    Json(state.controller.upsert_mail(mail).await)
+}
+
+async fn delete_mail(State(state): State<AppState>, Path(id): Path<String>) -> Json<IrisSnapshot> {
+    Json(state.controller.delete_mail(&id).await)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpsertEventReq {
+    id: Option<String>,
+    title: String,
+    date: String,
+    #[serde(default)]
+    start_time: String,
+    #[serde(default)]
+    end_time: String,
+    #[serde(default)]
+    location: String,
+}
+
+async fn upsert_event(
+    State(state): State<AppState>,
+    Json(req): Json<UpsertEventReq>,
+) -> Json<IrisSnapshot> {
+    let event = OrgEvent {
+        id: req.id.unwrap_or_else(|| format!("evt-{}", Uuid::new_v4())),
+        title: req.title,
+        date: req.date,
+        start_time: req.start_time,
+        end_time: req.end_time,
+        location: req.location,
+        source: "manual".to_string(),
+    };
+    Json(state.controller.upsert_event(event).await)
+}
+
+async fn delete_event(State(state): State<AppState>, Path(id): Path<String>) -> Json<IrisSnapshot> {
+    Json(state.controller.delete_event(&id).await)
+}
+
 async fn update_settings(
     State(state): State<AppState>,
     Json(new_settings): Json<IrisSettings>,
 ) -> Json<IrisSnapshot> {
-    let old_mqtt = state.controller.snapshot().await.settings.mqtt;
-    let reconnect = old_mqtt != new_settings.mqtt;
+    let current = state.controller.snapshot().await.settings;
+    let reconnect = current.mqtt != new_settings.mqtt;
+    let refresh_org_needed = current.org != new_settings.org;
     let mqtt_cfg = new_settings.mqtt.clone();
     let snap = state
         .controller
@@ -310,6 +401,12 @@ async fn update_settings(
         .await;
     if reconnect {
         state.mqtt.connect(mqtt_cfg).await;
+    }
+    if refresh_org_needed {
+        let ctrl = Arc::clone(&state.controller);
+        tokio::spawn(async move {
+            crate::org_sync::refresh_org_now(ctrl).await;
+        });
     }
     Json(snap)
 }

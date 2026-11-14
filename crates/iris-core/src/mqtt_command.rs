@@ -1,7 +1,7 @@
 use chrono::Utc;
 use serde_json::Value;
 
-use crate::model::{ActiveAlert, AlertSeverity, ScreenType};
+use crate::model::{ActiveAlert, AlertSeverity, OrgEvent, OrgMail, ScreenType};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IrisCommand {
@@ -35,6 +35,8 @@ pub enum IrisCommand {
     DeleteNote {
         id: String,
     },
+    UpsertMail(OrgMail),
+    UpsertEvent(OrgEvent),
 }
 
 /// Parses incoming MQTT topic/payload pairs into strongly-typed [`IrisCommand`] values.
@@ -54,6 +56,8 @@ impl MqttCommandParser {
             "brightness" => parse_brightness_command(trimmed),
             "reload" => Some(IrisCommand::Reload),
             "note" => parse_note_command(trimmed),
+            "mail" => parse_mail_command(trimmed),
+            "event" => parse_event_command(trimmed),
             _ => None,
         }
     }
@@ -354,6 +358,102 @@ fn parse_note_command(payload: &str) -> Option<IrisCommand> {
         done,
         pinned,
     })
+}
+
+fn parse_mail_command(payload: &str) -> Option<IrisCommand> {
+    let obj = parse_json_object(payload)?;
+    let subject = obj
+        .get("subject")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?
+        .to_string();
+    let sender = obj
+        .get("sender")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Inconnu")
+        .to_string();
+    let id = obj
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("mail-{}", Utc::now().timestamp_millis()));
+    let snippet = obj
+        .get("snippet")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let received_at = obj
+        .get("receivedAt")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let unread = obj.get("unread").and_then(Value::as_bool).unwrap_or(true);
+    let important = obj
+        .get("important")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    Some(IrisCommand::UpsertMail(OrgMail {
+        id,
+        sender,
+        subject,
+        snippet,
+        received_at,
+        unread,
+        important,
+    }))
+}
+
+fn parse_event_command(payload: &str) -> Option<IrisCommand> {
+    let obj = parse_json_object(payload)?;
+    let title = obj
+        .get("title")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?
+        .to_string();
+    let date = obj
+        .get("date")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("")
+        .to_string();
+    let id = obj
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("evt-{}", Utc::now().timestamp_millis()));
+    let start_time = obj
+        .get("startTime")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let end_time = obj
+        .get("endTime")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let location = obj
+        .get("location")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    Some(IrisCommand::UpsertEvent(OrgEvent {
+        id,
+        title,
+        date,
+        start_time,
+        end_time,
+        location,
+        source: "mqtt".to_string(),
+    }))
 }
 
 fn parse_json_object(raw: &str) -> Option<serde_json::Map<String, Value>> {

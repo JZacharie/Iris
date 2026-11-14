@@ -28,7 +28,10 @@ impl DashboardUrlFormatter {
             ScreenType::Grafana => format_grafana_url(trimmed, kiosk_mode, auto_refresh_seconds),
             ScreenType::OpenObserve => format_openobserve_url(trimmed, kiosk_mode),
             ScreenType::Web => trimmed.to_string(),
-            ScreenType::OrgOverview | ScreenType::OrgNotes | ScreenType::OrgClock => String::new(),
+            ScreenType::OrgOverview
+            | ScreenType::OrgNotes
+            | ScreenType::OrgClock
+            | ScreenType::OrgAgenda => String::new(),
         }
     }
 }

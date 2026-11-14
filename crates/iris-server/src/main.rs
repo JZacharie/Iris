@@ -1,5 +1,6 @@
 mod assets;
 mod config;
+mod org_sync;
 mod routes;
 
 use std::sync::Arc;
@@ -36,6 +37,7 @@ async fn main() -> anyhow::Result<()> {
 
     let controller = IrisController::new(initial.clone(), repo);
     controller.spawn_rotation_loop();
+    org_sync::spawn_org_sync_loop(Arc::clone(&controller));
 
     let mqtt = RumqttcAdapter::new(Arc::clone(&controller));
     controller

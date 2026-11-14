@@ -4,7 +4,8 @@ use std::time::Duration;
 use chrono::Utc;
 use iris_core::{
     ActiveAlert, DashboardUrlFormatter, DisplayScreen, IrisCommand, IrisPersistedState,
-    IrisSettings, IrisSnapshot, MqttCommandParser, MqttConnectionState, OrgNote, Result,
+    IrisSettings, IrisSnapshot, MqttCommandParser, MqttConnectionState, OrgEvent, OrgFeedData,
+    OrgMail, OrgNote, Result, WeatherForecast,
 };
 use tokio::sync::{broadcast, RwLock};
 use tracing::{info, warn};
@@ -19,6 +20,9 @@ struct InnerState {
     active_alert: Option<ActiveAlert>,
     previous_screen_id_before_alert: Option<String>,
     notes: Vec<OrgNote>,
+    weather: Option<WeatherForecast>,
+    mails: Vec<OrgMail>,
+    events: Vec<OrgEvent>,
     settings: IrisSettings,
     mqtt_state: MqttConnectionState,
     mqtt_status_detail: String,
@@ -47,6 +51,9 @@ impl InnerState {
             active_alert: None,
             previous_screen_id_before_alert: None,
             notes: persisted.notes,
+            weather: None,
+            mails: persisted.mails,
+            events: persisted.events,
             settings: persisted.settings,
             mqtt_state: MqttConnectionState::Disconnected,
             mqtt_status_detail: String::new(),
@@ -58,6 +65,13 @@ impl InnerState {
         IrisPersistedState {
             screens: self.screens.clone(),
             notes: self.notes.clone(),
+            mails: self.mails.clone(),
+            events: self
+                .events
+                .iter()
+                .filter(|e| e.source != "ical")
+                .cloned()
+                .collect(),
             settings: self.settings.clone(),
             active_screen_id: self.active_screen.as_ref().map(|s| s.id.clone()),
         }
@@ -81,6 +95,11 @@ impl InnerState {
             formatted_url,
             active_alert: self.active_alert.clone(),
             notes: self.notes.clone(),
+            org: OrgFeedData {
+                weather: self.weather.clone(),
+                mails: self.mails.clone(),
+                events: self.events.clone(),
+            },
             settings: self.settings.clone(),
             mqtt_state: self.mqtt_state,
             mqtt_status_detail: self.mqtt_status_detail.clone(),
@@ -388,7 +407,88 @@ impl IrisController {
                 pinned,
             } => self.upsert_note(id, text, category, done, pinned).await,
             IrisCommand::DeleteNote { id } => self.delete_note(&id).await,
+            IrisCommand::UpsertMail(mail) => self.upsert_mail(mail).await,
+            IrisCommand::UpsertEvent(event) => self.upsert_event(event).await,
         }
+    }
+
+    pub async fn set_weather(&self, weather: WeatherForecast) -> IrisSnapshot {
+        let snapshot = {
+            let mut state = self.inner.write().await;
+            state.weather = Some(weather);
+            state.snapshot()
+        };
+        self.broadcast_only(&snapshot).await;
+        snapshot
+    }
+
+    pub async fn set_ical_events(&self, ical_events: Vec<OrgEvent>) -> IrisSnapshot {
+        let snapshot = {
+            let mut state = self.inner.write().await;
+            state.events.retain(|e| e.source != "ical");
+            state.events.extend(ical_events);
+            state.events.sort_by(|a, b| {
+                a.date
+                    .cmp(&b.date)
+                    .then_with(|| a.start_time.cmp(&b.start_time))
+            });
+            state.snapshot()
+        };
+        self.broadcast_only(&snapshot).await;
+        snapshot
+    }
+
+    pub async fn upsert_mail(&self, mail: OrgMail) -> IrisSnapshot {
+        let (snapshot, persisted) = {
+            let mut state = self.inner.write().await;
+            if let Some(slot) = state.mails.iter_mut().find(|m| m.id == mail.id) {
+                *slot = mail;
+            } else {
+                state.mails.insert(0, mail);
+            }
+            (state.snapshot(), state.to_persisted())
+        };
+        self.persist_and_broadcast(&persisted, &snapshot).await;
+        snapshot
+    }
+
+    pub async fn delete_mail(&self, mail_id: &str) -> IrisSnapshot {
+        let (snapshot, persisted) = {
+            let mut state = self.inner.write().await;
+            state.mails.retain(|m| m.id != mail_id);
+            (state.snapshot(), state.to_persisted())
+        };
+        self.persist_and_broadcast(&persisted, &snapshot).await;
+        snapshot
+    }
+
+    pub async fn upsert_event(&self, event: OrgEvent) -> IrisSnapshot {
+        let (snapshot, persisted) = {
+            let mut state = self.inner.write().await;
+            if let Some(slot) = state.events.iter_mut().find(|e| e.id == event.id) {
+                *slot = event;
+            } else {
+                state.events.push(event);
+            }
+            state.events.sort_by(|a, b| {
+                a.date
+                    .cmp(&b.date)
+                    .then_with(|| a.start_time.cmp(&b.start_time))
+            });
+            (state.snapshot(), state.to_persisted())
+        };
+        self.persist_and_broadcast(&persisted, &snapshot).await;
+        snapshot
+    }
+
+    pub async fn delete_event(&self, event_id: &str) -> IrisSnapshot {
+        let (snapshot, persisted) = {
+            let mut state = self.inner.write().await;
+            state.events.retain(|e| e.id != event_id);
+            (state.snapshot(), state.to_persisted())
+        };
+        self.persist_and_broadcast(&persisted, &snapshot).await;
+        snapshot
     }
 
     pub async fn upsert_screen(&self, screen: DisplayScreen) -> IrisSnapshot {
@@ -591,6 +691,8 @@ mod tests {
                 },
             ],
             notes: vec![],
+            mails: vec![],
+            events: vec![],
             settings: IrisSettings::default(),
             active_screen_id: Some("org-overview".to_string()),
         }

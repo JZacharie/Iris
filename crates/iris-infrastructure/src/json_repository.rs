@@ -21,6 +21,8 @@ impl JsonFileRepository {
         IrisPersistedState {
             screens: Self::default_screens(),
             notes: Self::default_notes(),
+            mails: vec![],
+            events: vec![],
             settings: IrisSettings::default(),
             active_screen_id: Some("org-overview".to_string()),
         }
@@ -55,6 +57,16 @@ impl JsonFileRepository {
                 url: "https://grafana.zacharie.org/d/".to_string(),
                 kiosk_mode: true,
                 auto_refresh_seconds: 30,
+                enabled: true,
+                is_alert_target: false,
+            },
+            DisplayScreen {
+                id: "org-agenda".to_string(),
+                name: "Planning & Mails".to_string(),
+                screen_type: ScreenType::OrgAgenda,
+                url: String::new(),
+                kiosk_mode: true,
+                auto_refresh_seconds: 0,
                 enabled: true,
                 is_alert_target: false,
             },

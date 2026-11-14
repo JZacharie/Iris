@@ -9,6 +9,7 @@ pub enum ScreenType {
     OrgOverview,
     OrgNotes,
     OrgClock,
+    OrgAgenda,
 }
 
 impl ScreenType {
@@ -24,6 +25,7 @@ impl ScreenType {
             Self::OrgOverview => "Organisation — Hub",
             Self::OrgNotes => "Organisation — Notes",
             Self::OrgClock => "Organisation — Horloge",
+            Self::OrgAgenda => "Organisation — Planning & Mails",
         }
     }
 }
@@ -167,6 +169,8 @@ impl MqttConfig {
 pub struct IrisSettings {
     #[serde(default)]
     pub mqtt: MqttConfig,
+    #[serde(default)]
+    pub org: OrgConfig,
     #[serde(default = "default_true")]
     pub rotation_enabled: bool,
     #[serde(default = "default_rotation_interval")]
@@ -185,6 +189,7 @@ impl Default for IrisSettings {
     fn default() -> Self {
         Self {
             mqtt: MqttConfig::default(),
+            org: OrgConfig::default(),
             rotation_enabled: true,
             rotation_interval_seconds: default_rotation_interval(),
             keep_screen_on: true,
@@ -193,6 +198,93 @@ impl Default for IrisSettings {
             brightness_percent: default_brightness(),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrgConfig {
+    #[serde(default = "default_weather_city")]
+    pub weather_city: String,
+    #[serde(default = "default_weather_lat")]
+    pub weather_lat: String,
+    #[serde(default = "default_weather_lon")]
+    pub weather_lon: String,
+    #[serde(default)]
+    pub ical_url: String,
+}
+
+impl Default for OrgConfig {
+    fn default() -> Self {
+        Self {
+            weather_city: default_weather_city(),
+            weather_lat: default_weather_lat(),
+            weather_lon: default_weather_lon(),
+            ical_url: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WeatherDay {
+    pub date: String,
+    pub label: String,
+    pub icon: String,
+    pub temp_min_c: i32,
+    pub temp_max_c: i32,
+    pub precip_prob_pct: u32,
+    pub wind_max_kmh: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WeatherForecast {
+    pub city: String,
+    pub current_temp_c: i32,
+    pub current_label: String,
+    pub current_icon: String,
+    pub days: Vec<WeatherDay>,
+    pub updated_at_epoch_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrgMail {
+    pub id: String,
+    pub sender: String,
+    pub subject: String,
+    #[serde(default)]
+    pub snippet: String,
+    #[serde(default)]
+    pub received_at: String,
+    #[serde(default = "default_true")]
+    pub unread: bool,
+    #[serde(default)]
+    pub important: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrgEvent {
+    pub id: String,
+    pub title: String,
+    pub date: String,
+    #[serde(default)]
+    pub start_time: String,
+    #[serde(default)]
+    pub end_time: String,
+    #[serde(default)]
+    pub location: String,
+    #[serde(default)]
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrgFeedData {
+    pub weather: Option<WeatherForecast>,
+    pub mails: Vec<OrgMail>,
+    pub events: Vec<OrgEvent>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -209,6 +301,10 @@ pub enum MqttConnectionState {
 pub struct IrisPersistedState {
     pub screens: Vec<DisplayScreen>,
     pub notes: Vec<OrgNote>,
+    #[serde(default)]
+    pub mails: Vec<OrgMail>,
+    #[serde(default)]
+    pub events: Vec<OrgEvent>,
     pub settings: IrisSettings,
     pub active_screen_id: Option<String>,
 }
@@ -223,10 +319,21 @@ pub struct IrisSnapshot {
     pub formatted_url: String,
     pub active_alert: Option<ActiveAlert>,
     pub notes: Vec<OrgNote>,
+    pub org: OrgFeedData,
     pub settings: IrisSettings,
     pub mqtt_state: MqttConnectionState,
     pub mqtt_status_detail: String,
     pub reload_counter: u64,
+}
+
+fn default_weather_city() -> String {
+    "Lyon".to_string()
+}
+fn default_weather_lat() -> String {
+    "45.7640".to_string()
+}
+fn default_weather_lon() -> String {
+    "4.8357".to_string()
 }
 
 fn default_true() -> bool {
