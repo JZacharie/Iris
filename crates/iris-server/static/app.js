@@ -102,6 +102,7 @@ function renderStage(snap) {
 
   lastRenderedKey = null;
   if (screen.type === "ORG_OVERVIEW") renderOrgOverview(stage, snap);
+  else if (screen.type === "ORG_LIFE_INFRA") renderLifeInfra(stage, snap);
   else if (screen.type === "ORG_STREAM_DECK") renderStreamDeck(stage, snap);
   else if (screen.type === "ORG_AGENDA") renderOrgAgenda(stage, snap);
   else if (screen.type === "ORG_NOTES") renderOrgNotes(stage, snap);
@@ -264,6 +265,12 @@ function renderOrgOverview(stage, snap) {
   const notes = snap.notes.filter((n) => !n.done).slice(0, 4);
   const mails = (snap.org?.mails || []).slice(0, 4);
   const events = (snap.org?.events || []).slice(0, 4);
+  const comms = snap.comms || {};
+  const shopPending = (snap.shoppingList || []).filter((i) => !i.completed).length;
+  const driveReady = (snap.driveOrders || []).filter((o) => o.readyForPickup).length;
+  const cluster = snap.infra?.cluster;
+  const offlineCount = cluster?.offlineNodes?.length || 0;
+  const openPrs = snap.infra?.openPrs || [];
 
   stage.innerHTML = `
     <div class="org-view">
@@ -278,6 +285,19 @@ function renderOrgOverview(stage, snap) {
             <h3>Pilotage MQTT & Incidents</h3>
             <p style="margin-top:8px;">MQTT : <strong>${snap.mqttState}</strong> • ${snap.activeAlert ? "⚠️ " + escapeHtml(snap.activeAlert.title) : "✅ Nominal"}</p>
             <p style="color:var(--muted); font-size:12px;">Topic : ${snap.settings.mqtt.baseTopic}/${snap.settings.mqtt.deviceId}/command/#</p>
+          </div>
+          <div class="card">
+            <h3>🔔 Synthèse Vie & Infra</h3>
+            <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:10px;font-size:13px;">
+              <div>📞 Appels manqués : <strong style="color:${(comms.missedCalls || 0) > 0 ? "var(--crit)" : "inherit"}">${comms.missedCalls || 0}</strong></div>
+              <div>📼 Répondeur : <strong style="color:${(comms.voicemails || 0) > 0 ? "var(--warn)" : "inherit"}">${comms.voicemails || 0}</strong></div>
+              <div>💬 Teams non lus : <strong>${comms.teamsUnread || 0}</strong></div>
+              <div>✉️ Mails non lus : <strong>${comms.mailsUnread || 0}</strong></div>
+              <div>🛒 Courses Alexa : <strong>${shopPending}</strong></div>
+              <div>🚗 ClearDrive prêt : <strong style="color:${driveReady > 0 ? "var(--ok)" : "inherit"}">${driveReady}</strong></div>
+              <div>☸️ Cluster jo3 : <strong style="color:${offlineCount > 0 ? "var(--crit)" : "var(--ok)"}">${cluster ? `${cluster.nodesReady}/${cluster.nodesTotal} Ready` : "—"}</strong></div>
+              <div>🔀 PRs GitHub : <strong>${openPrs.length}</strong></div>
+            </div>
           </div>
         </div>
         <div class="col">
@@ -311,6 +331,163 @@ function renderOrgOverview(stage, snap) {
     btn.innerHTML = `<strong>${escapeHtml(s.name)}</strong><div style="color:var(--muted);font-size:12px;margin-top:4px;">${s.type}</div>`;
     btn.onclick = () => api("/api/screen/select", "POST", { target: s.id });
     launchers.appendChild(btn);
+  });
+}
+
+function renderLifeInfra(stage, snap) {
+  const comms = snap.comms || {};
+  const missedDetails = comms.missedCallDetails || [];
+  const voicemailDetails = comms.voicemailDetails || [];
+  const shopping = snap.shoppingList || [];
+  const driveOrders = snap.driveOrders || [];
+  const cluster = snap.infra?.cluster;
+  const offlineNodes = cluster?.offlineNodes || [];
+  const openPrs = snap.infra?.openPrs || [];
+
+  stage.innerHTML = `
+    <div class="org-view">
+      <div class="row" style="justify-content:space-between;margin-bottom:16px;">
+        <div>
+          <h2>Vie Quotidienne, Messagerie & Infra jo3</h2>
+          <div style="color:var(--muted);font-size:13px;">Téléphone, Teams, Mails, Alexa, ClearDrive, nœuds Kubernetes jo3 & PRs GitHub</div>
+        </div>
+        <button class="btn primary" id="btn-refresh-infra">↻ Actualiser Infra & PRs</button>
+      </div>
+
+      <div class="grid-2">
+        <div class="col">
+          <div class="card">
+            <h3>📞 Téléphone & Messagerie</h3>
+            <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:12px;">
+              <div class="metric-card">
+                <div style="color:var(--muted);font-size:12px;">Appels en absence</div>
+                <div style="font-size:26px;font-weight:800;color:${(comms.missedCalls || 0) > 0 ? "var(--crit)" : "var(--ok)"}">${comms.missedCalls || 0}</div>
+              </div>
+              <div class="metric-card">
+                <div style="color:var(--muted);font-size:12px;">Messages répondeur</div>
+                <div style="font-size:26px;font-weight:800;color:${(comms.voicemails || 0) > 0 ? "var(--warn)" : "var(--ok)"}">${comms.voicemails || 0}</div>
+              </div>
+              <div class="metric-card">
+                <div style="color:var(--muted);font-size:12px;">Teams non lus</div>
+                <div style="font-size:26px;font-weight:800;">${comms.teamsUnread || 0}</div>
+              </div>
+              <div class="metric-card">
+                <div style="color:var(--muted);font-size:12px;">Mails non lus</div>
+                <div style="font-size:26px;font-weight:800;">${comms.mailsUnread || 0}</div>
+              </div>
+            </div>
+            ${missedDetails.length ? `<div style="margin-top:10px;font-size:13px;"><strong>Appels manqués :</strong> ${missedDetails.map((d) => escapeHtml(d)).join(" • ")}</div>` : ""}
+            ${voicemailDetails.length ? `<div style="margin-top:6px;font-size:13px;"><strong>Répondeur :</strong> ${voicemailDetails.map((d) => escapeHtml(d)).join(" • ")}</div>` : ""}
+          </div>
+
+          <div class="card">
+            <h3>🛒 Liste d'achats Alexa (${shopping.filter((i) => !i.completed).length} à acheter)</h3>
+            <div class="row" style="margin-top:10px;margin-bottom:10px;">
+              <input id="shop-new-name" placeholder="Ajouter un article Alexa..." style="flex:1;" />
+              <button class="btn primary" id="btn-add-shop">+ Ajouter</button>
+            </div>
+            <div id="shop-list">
+              ${shopping.length ? shopping.map((item) => `
+                <div class="row" style="justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);">
+                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer;text-decoration:${item.completed ? "line-through" : "none"};opacity:${item.completed ? "0.55" : "1"};">
+                    <input type="checkbox" class="shop-toggle" data-id="${escapeHtml(item.id)}" ${item.completed ? "checked" : ""} />
+                    <span>${escapeHtml(item.name)}</span>
+                  </label>
+                  <button class="btn shop-del" data-id="${escapeHtml(item.id)}" style="padding:4px 8px;">✕</button>
+                </div>
+              `).join("") : "<span style='color:var(--muted)'>Liste d'achats Alexa vide.</span>"}
+            </div>
+          </div>
+        </div>
+
+        <div class="col">
+          <div class="card">
+            <h3>🚗 ClearDrive — Commandes à relever (${driveOrders.filter((o) => o.readyForPickup).length} prête(s))</h3>
+            <div class="row" style="margin-top:10px;margin-bottom:10px;">
+              <input id="drive-new-store" placeholder="Magasin (ex: ClearDrive)" value="ClearDrive" style="flex:1;" />
+              <input id="drive-new-slot" placeholder="Créneau (ex: 17h30)" style="flex:1;" />
+              <button class="btn primary" id="btn-add-drive">+ Commande</button>
+            </div>
+            <div>
+              ${driveOrders.length ? driveOrders.map((o) => `
+                <div class="row" style="justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
+                  <div>
+                    <strong>${escapeHtml(o.store)}</strong> — <span>${escapeHtml(o.status)}</span>
+                    ${o.readyForPickup ? `<span class="badge" style="background:var(--ok);color:#000;margin-left:6px;">À relever</span>` : ""}
+                    ${o.pickupSlot ? `<div style="color:var(--muted);font-size:12px;">Créneau : ${escapeHtml(o.pickupSlot)}</div>` : ""}
+                  </div>
+                  <button class="btn drive-del" data-id="${escapeHtml(o.id)}" style="padding:4px 8px;">✕</button>
+                </div>
+              `).join("") : "<span style='color:var(--muted)'>Aucune commande ClearDrive en cours.</span>"}
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>☸️ Cluster Kubernetes jo3</h3>
+            <div style="margin-top:8px;">
+              ${cluster ? `
+                <div style="font-size:15px;font-weight:700;color:${offlineNodes.length > 0 ? "var(--crit)" : "var(--ok)"}">
+                  ${offlineNodes.length > 0 ? `⚠️ ${offlineNodes.length} node(s) offline` : "✅ Tous les nodes sont Ready"}
+                  (${cluster.nodesReady} / ${cluster.nodesTotal})
+                </div>
+                ${offlineNodes.length > 0 ? `<div style="margin-top:6px;color:var(--crit);font-size:13px;">Offline : ${offlineNodes.map((n) => escapeHtml(n)).join(", ")}</div>` : ""}
+              ` : "<span style='color:var(--muted)'>Statut cluster jo3 non encore remonté (en attente de l'API Kubernetes).</span>"}
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>🔀 PRs GitHub & Mises à jour (${openPrs.length})</h3>
+            <div style="margin-top:8px;max-height:260px;overflow-y:auto;">
+              ${openPrs.length ? openPrs.map((pr) => `
+                <div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:13px;">
+                  <div>
+                    <a href="${escapeHtml(pr.url)}" target="_blank" rel="noopener" style="color:var(--primary);font-weight:600;text-decoration:none;">
+                      ${escapeHtml(pr.repo)} #${pr.number}
+                    </a>
+                    ${pr.isDependencyUpdate ? `<span class="badge" style="margin-left:6px;">Dépendance</span>` : ""}
+                  </div>
+                  <div>${escapeHtml(pr.title)}</div>
+                  <div style="color:var(--muted);font-size:11px;">par ${escapeHtml(pr.author)}</div>
+                </div>
+              `).join("") : "<span style='color:var(--muted)'>Aucune PR ouverte sur les dépôts suivis.</span>"}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.getElementById("btn-refresh-infra").onclick = () => api("/api/org/refresh", "POST");
+
+  document.getElementById("btn-add-shop").onclick = () => {
+    const input = document.getElementById("shop-new-name");
+    const name = input.value.trim();
+    if (!name) return;
+    api("/api/home/shopping", "POST", { name, completed: false });
+    input.value = "";
+  };
+
+  document.querySelectorAll(".shop-toggle").forEach((el) => {
+    el.onchange = () => api(`/api/home/shopping/${encodeURIComponent(el.dataset.id)}/toggle`, "POST");
+  });
+
+  document.querySelectorAll(".shop-del").forEach((el) => {
+    el.onclick = () => api(`/api/home/shopping/${encodeURIComponent(el.dataset.id)}`, "DELETE");
+  });
+
+  document.getElementById("btn-add-drive").onclick = () => {
+    const store = document.getElementById("drive-new-store").value.trim() || "ClearDrive";
+    const pickupSlot = document.getElementById("drive-new-slot").value.trim();
+    api("/api/home/cleardrive", "POST", {
+      store,
+      status: "Prête au retrait",
+      pickupSlot,
+      readyForPickup: true,
+    });
+  };
+
+  document.querySelectorAll(".drive-del").forEach((el) => {
+    el.onclick = () => api(`/api/home/cleardrive/${encodeURIComponent(el.dataset.id)}`, "DELETE");
   });
 }
 

@@ -11,6 +11,7 @@ pub enum ScreenType {
     OrgClock,
     OrgAgenda,
     OrgStreamDeck,
+    OrgLifeInfra,
 }
 
 impl ScreenType {
@@ -28,6 +29,7 @@ impl ScreenType {
             Self::OrgClock => "Organisation — Horloge",
             Self::OrgAgenda => "Organisation — Planning & Mails",
             Self::OrgStreamDeck => "Stream Deck & PC",
+            Self::OrgLifeInfra => "Vie Quotidienne & Infra",
         }
     }
 }
@@ -213,6 +215,8 @@ pub struct OrgConfig {
     pub weather_lon: String,
     #[serde(default)]
     pub ical_url: String,
+    #[serde(default = "default_github_repos")]
+    pub github_repos: Vec<String>,
 }
 
 impl Default for OrgConfig {
@@ -222,8 +226,18 @@ impl Default for OrgConfig {
             weather_lat: default_weather_lat(),
             weather_lon: default_weather_lon(),
             ical_url: String::new(),
+            github_repos: default_github_repos(),
         }
     }
+}
+
+fn default_github_repos() -> Vec<String> {
+    vec![
+        "JZacharie/jo3".to_string(),
+        "JZacharie/Iris".to_string(),
+        "JZacharie/Kusanagi".to_string(),
+        "JZacharie/Pylos".to_string(),
+    ]
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -387,6 +401,78 @@ pub struct PcTelemetry {
     pub updated_at_epoch_ms: i64,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommsStatus {
+    #[serde(default)]
+    pub missed_calls: u32,
+    #[serde(default)]
+    pub missed_call_details: Vec<String>,
+    #[serde(default)]
+    pub voicemails: u32,
+    #[serde(default)]
+    pub voicemail_details: Vec<String>,
+    #[serde(default)]
+    pub teams_unread: u32,
+    #[serde(default)]
+    pub mails_unread: u32,
+    #[serde(default)]
+    pub updated_at_epoch_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShoppingItem {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub completed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DriveOrder {
+    pub id: String,
+    #[serde(default = "default_drive_store")]
+    pub store: String,
+    pub status: String,
+    #[serde(default)]
+    pub pickup_slot: String,
+    #[serde(default)]
+    pub ready_for_pickup: bool,
+}
+
+fn default_drive_store() -> String {
+    "ClearDrive".to_string()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClusterStatus {
+    pub nodes_total: u32,
+    pub nodes_ready: u32,
+    pub offline_nodes: Vec<String>,
+    pub checked_at_epoch_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubPrSummary {
+    pub repo: String,
+    pub number: u64,
+    pub title: String,
+    pub author: String,
+    pub url: String,
+    pub is_dependency_update: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InfraStatus {
+    pub cluster: Option<ClusterStatus>,
+    pub open_prs: Vec<GitHubPrSummary>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MqttConnectionState {
@@ -407,6 +493,12 @@ pub struct IrisPersistedState {
     pub events: Vec<OrgEvent>,
     #[serde(default)]
     pub deck_buttons: Vec<DeckButton>,
+    #[serde(default)]
+    pub comms: CommsStatus,
+    #[serde(default)]
+    pub shopping_list: Vec<ShoppingItem>,
+    #[serde(default)]
+    pub drive_orders: Vec<DriveOrder>,
     pub settings: IrisSettings,
     pub active_screen_id: Option<String>,
 }
@@ -422,6 +514,10 @@ pub struct IrisSnapshot {
     pub active_alert: Option<ActiveAlert>,
     pub notes: Vec<OrgNote>,
     pub org: OrgFeedData,
+    pub comms: CommsStatus,
+    pub shopping_list: Vec<ShoppingItem>,
+    pub drive_orders: Vec<DriveOrder>,
+    pub infra: InfraStatus,
     pub deck_buttons: Vec<DeckButton>,
     pub pc_telemetry: Option<PcTelemetry>,
     pub last_deck_action: Option<DeckActionEvent>,

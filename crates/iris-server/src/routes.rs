@@ -9,8 +9,8 @@ use axum::{Json, Router};
 use chrono::Utc;
 use iris_application::IrisController;
 use iris_core::{
-    ActiveAlert, AlertSeverity, DeckButton, DisplayScreen, IrisSettings, IrisSnapshot, OrgEvent,
-    OrgMail, PcTelemetry,
+    ActiveAlert, AlertSeverity, CommsStatus, DeckButton, DisplayScreen, DriveOrder, IrisSettings,
+    IrisSnapshot, OrgEvent, OrgMail, PcTelemetry, ShoppingItem,
 };
 use iris_infrastructure::RumqttcAdapter;
 use prometheus::{Encoder, TextEncoder};
@@ -47,6 +47,12 @@ pub fn api_router(state: AppState) -> Router {
         .route("/api/org/mails/{id}", delete(delete_mail))
         .route("/api/org/events", post(upsert_event))
         .route("/api/org/events/{id}", delete(delete_event))
+        .route("/api/comms/status", post(update_comms_status))
+        .route("/api/home/shopping", post(upsert_shopping_item))
+        .route("/api/home/shopping/{id}/toggle", post(toggle_shopping_item))
+        .route("/api/home/shopping/{id}", delete(delete_shopping_item))
+        .route("/api/home/cleardrive", post(upsert_drive_order))
+        .route("/api/home/cleardrive/{id}", delete(delete_drive_order))
         .route("/api/pc/telemetry", post(update_pc_telemetry))
         .route("/api/deck/trigger", post(trigger_deck_button))
         .route("/api/deck/buttons", post(upsert_deck_button))
@@ -490,6 +496,91 @@ async fn update_settings(
 
 async fn request_reload(State(state): State<AppState>) -> Json<IrisSnapshot> {
     Json(state.controller.request_reload().await)
+}
+
+async fn update_comms_status(
+    State(state): State<AppState>,
+    Json(mut comms): Json<CommsStatus>,
+) -> Json<IrisSnapshot> {
+    if comms.updated_at_epoch_ms == 0 {
+        comms.updated_at_epoch_ms = Utc::now().timestamp_millis();
+    }
+    Json(state.controller.update_comms(comms).await)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpsertShoppingItemReq {
+    id: Option<String>,
+    name: String,
+    #[serde(default)]
+    completed: bool,
+}
+
+async fn upsert_shopping_item(
+    State(state): State<AppState>,
+    Json(req): Json<UpsertShoppingItemReq>,
+) -> Json<IrisSnapshot> {
+    let item = ShoppingItem {
+        id: req.id.unwrap_or_else(|| format!("shop-{}", Uuid::new_v4())),
+        name: req.name,
+        completed: req.completed,
+    };
+    Json(state.controller.upsert_shopping_item(item).await)
+}
+
+async fn toggle_shopping_item(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Json<IrisSnapshot> {
+    Json(state.controller.toggle_shopping_item(&id).await)
+}
+
+async fn delete_shopping_item(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Json<IrisSnapshot> {
+    Json(state.controller.delete_shopping_item(&id).await)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpsertDriveOrderReq {
+    id: Option<String>,
+    #[serde(default = "default_drive_store")]
+    store: String,
+    status: String,
+    #[serde(default)]
+    pickup_slot: String,
+    #[serde(default)]
+    ready_for_pickup: bool,
+}
+
+fn default_drive_store() -> String {
+    "ClearDrive".to_string()
+}
+
+async fn upsert_drive_order(
+    State(state): State<AppState>,
+    Json(req): Json<UpsertDriveOrderReq>,
+) -> Json<IrisSnapshot> {
+    let order = DriveOrder {
+        id: req
+            .id
+            .unwrap_or_else(|| format!("drive-{}", Uuid::new_v4())),
+        store: req.store,
+        status: req.status,
+        pickup_slot: req.pickup_slot,
+        ready_for_pickup: req.ready_for_pickup,
+    };
+    Json(state.controller.upsert_drive_order(order).await)
+}
+
+async fn delete_drive_order(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Json<IrisSnapshot> {
+    Json(state.controller.delete_drive_order(&id).await)
 }
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {

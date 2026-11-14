@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use chrono::Utc;
 use iris_application::StateRepository;
 use iris_core::{
-    DeckActionKind, DeckButton, DisplayScreen, IrisError, IrisPersistedState, IrisSettings,
-    OrgNote, Result, ScreenType,
+    CommsStatus, DeckActionKind, DeckButton, DisplayScreen, IrisError, IrisPersistedState,
+    IrisSettings, OrgNote, Result, ScreenType,
 };
 use tracing::warn;
 
@@ -25,6 +25,9 @@ impl JsonFileRepository {
             mails: vec![],
             events: vec![],
             deck_buttons: Self::default_deck_buttons(),
+            comms: CommsStatus::default(),
+            shopping_list: vec![],
+            drive_orders: vec![],
             settings: IrisSettings::default(),
             active_screen_id: Some("org-overview".to_string()),
         }
@@ -121,6 +124,16 @@ impl JsonFileRepository {
                 id: "org-overview".to_string(),
                 name: "Hub Organisation".to_string(),
                 screen_type: ScreenType::OrgOverview,
+                url: String::new(),
+                kiosk_mode: true,
+                auto_refresh_seconds: 0,
+                enabled: true,
+                is_alert_target: false,
+            },
+            DisplayScreen {
+                id: "org-life-infra".to_string(),
+                name: "Vie & Infra".to_string(),
+                screen_type: ScreenType::OrgLifeInfra,
                 url: String::new(),
                 kiosk_mode: true,
                 auto_refresh_seconds: 0,

@@ -3,10 +3,11 @@ use std::time::Duration;
 
 use chrono::Utc;
 use iris_core::{
-    ActiveAlert, BarthesState, DashboardUrlFormatter, DeckActionEvent, DeckActionKind, DeckButton,
-    DisplayScreen, IrisCommand, IrisPersistedState, IrisSettings, IrisSnapshot, MqttCommandParser,
+    ActiveAlert, BarthesState, ClusterStatus, CommsStatus, DashboardUrlFormatter, DeckActionEvent,
+    DeckActionKind, DeckButton, DisplayScreen, DriveOrder, GitHubPrSummary, InfraStatus,
+    IrisCommand, IrisPersistedState, IrisSettings, IrisSnapshot, MqttCommandParser,
     MqttConnectionState, OrgEvent, OrgFeedData, OrgMail, OrgNote, PcTelemetry, Result, ScreenType,
-    WeatherForecast,
+    ShoppingItem, WeatherForecast,
 };
 use tokio::sync::{broadcast, RwLock};
 use tracing::{info, warn};
@@ -24,6 +25,10 @@ struct InnerState {
     weather: Option<WeatherForecast>,
     mails: Vec<OrgMail>,
     events: Vec<OrgEvent>,
+    comms: CommsStatus,
+    shopping_list: Vec<ShoppingItem>,
+    drive_orders: Vec<DriveOrder>,
+    infra: InfraStatus,
     deck_buttons: Vec<DeckButton>,
     pc_telemetry: Option<PcTelemetry>,
     last_deck_action: Option<DeckActionEvent>,
@@ -58,6 +63,10 @@ impl InnerState {
             weather: None,
             mails: persisted.mails,
             events: persisted.events,
+            comms: persisted.comms,
+            shopping_list: persisted.shopping_list,
+            drive_orders: persisted.drive_orders,
+            infra: InfraStatus::default(),
             deck_buttons: persisted.deck_buttons,
             pc_telemetry: None,
             last_deck_action: None,
@@ -80,6 +89,9 @@ impl InnerState {
                 .cloned()
                 .collect(),
             deck_buttons: self.deck_buttons.clone(),
+            comms: self.comms.clone(),
+            shopping_list: self.shopping_list.clone(),
+            drive_orders: self.drive_orders.clone(),
             settings: self.settings.clone(),
             active_screen_id: self.active_screen.as_ref().map(|s| s.id.clone()),
         }
@@ -98,8 +110,15 @@ impl InnerState {
         let barthes_state = compute_barthes_state(
             self.active_alert.as_ref(),
             self.pc_telemetry.as_ref(),
+            self.infra.cluster.as_ref(),
             displayed.as_ref(),
         );
+
+        let unread_from_list = self.mails.iter().filter(|m| m.unread).count() as u32;
+        let mut comms = self.comms.clone();
+        if comms.mails_unread == 0 && unread_from_list > 0 {
+            comms.mails_unread = unread_from_list;
+        }
 
         IrisSnapshot {
             screens: self.screens.clone(),
@@ -114,6 +133,10 @@ impl InnerState {
                 mails: self.mails.clone(),
                 events: self.events.clone(),
             },
+            comms,
+            shopping_list: self.shopping_list.clone(),
+            drive_orders: self.drive_orders.clone(),
+            infra: self.infra.clone(),
             deck_buttons: self.deck_buttons.clone(),
             pc_telemetry: self.pc_telemetry.clone(),
             last_deck_action: self.last_deck_action.clone(),
@@ -129,9 +152,12 @@ impl InnerState {
 fn compute_barthes_state(
     alert: Option<&ActiveAlert>,
     pc: Option<&PcTelemetry>,
+    cluster: Option<&ClusterStatus>,
     displayed: Option<&DisplayScreen>,
 ) -> BarthesState {
-    if alert.is_some_and(|a| !a.acknowledged) {
+    if alert.is_some_and(|a| !a.acknowledged)
+        || cluster.is_some_and(|c| !c.offline_nodes.is_empty())
+    {
         return BarthesState::Punctum;
     }
     if let Some(telemetry) = pc {
@@ -151,6 +177,7 @@ fn compute_barthes_state(
                 | ScreenType::OrgAgenda
                 | ScreenType::OrgNotes
                 | ScreenType::OrgStreamDeck
+                | ScreenType::OrgLifeInfra
         )
     }) {
         return BarthesState::Studium;
@@ -537,7 +564,100 @@ impl IrisController {
             IrisCommand::DeleteNote { id } => self.delete_note(&id).await,
             IrisCommand::UpsertMail(mail) => self.upsert_mail(mail).await,
             IrisCommand::UpsertEvent(event) => self.upsert_event(event).await,
+            IrisCommand::UpdateComms(comms) => self.update_comms(comms).await,
+            IrisCommand::UpsertShoppingItem(item) => self.upsert_shopping_item(item).await,
+            IrisCommand::UpsertDriveOrder(order) => self.upsert_drive_order(order).await,
         }
+    }
+
+    pub async fn update_comms(&self, comms: CommsStatus) -> IrisSnapshot {
+        let (snapshot, persisted) = {
+            let mut state = self.inner.write().await;
+            state.comms = comms;
+            (state.snapshot(), state.to_persisted())
+        };
+        self.persist_and_broadcast(&persisted, &snapshot).await;
+        snapshot
+    }
+
+    pub async fn upsert_shopping_item(&self, item: ShoppingItem) -> IrisSnapshot {
+        let (snapshot, persisted) = {
+            let mut state = self.inner.write().await;
+            if let Some(slot) = state.shopping_list.iter_mut().find(|i| i.id == item.id) {
+                *slot = item;
+            } else {
+                state.shopping_list.insert(0, item);
+            }
+            (state.snapshot(), state.to_persisted())
+        };
+        self.persist_and_broadcast(&persisted, &snapshot).await;
+        snapshot
+    }
+
+    pub async fn toggle_shopping_item(&self, item_id: &str) -> IrisSnapshot {
+        let (snapshot, persisted) = {
+            let mut state = self.inner.write().await;
+            if let Some(item) = state.shopping_list.iter_mut().find(|i| i.id == item_id) {
+                item.completed = !item.completed;
+            }
+            (state.snapshot(), state.to_persisted())
+        };
+        self.persist_and_broadcast(&persisted, &snapshot).await;
+        snapshot
+    }
+
+    pub async fn delete_shopping_item(&self, item_id: &str) -> IrisSnapshot {
+        let (snapshot, persisted) = {
+            let mut state = self.inner.write().await;
+            state.shopping_list.retain(|i| i.id != item_id);
+            (state.snapshot(), state.to_persisted())
+        };
+        self.persist_and_broadcast(&persisted, &snapshot).await;
+        snapshot
+    }
+
+    pub async fn upsert_drive_order(&self, order: DriveOrder) -> IrisSnapshot {
+        let (snapshot, persisted) = {
+            let mut state = self.inner.write().await;
+            if let Some(slot) = state.drive_orders.iter_mut().find(|o| o.id == order.id) {
+                *slot = order;
+            } else {
+                state.drive_orders.insert(0, order);
+            }
+            (state.snapshot(), state.to_persisted())
+        };
+        self.persist_and_broadcast(&persisted, &snapshot).await;
+        snapshot
+    }
+
+    pub async fn delete_drive_order(&self, order_id: &str) -> IrisSnapshot {
+        let (snapshot, persisted) = {
+            let mut state = self.inner.write().await;
+            state.drive_orders.retain(|o| o.id != order_id);
+            (state.snapshot(), state.to_persisted())
+        };
+        self.persist_and_broadcast(&persisted, &snapshot).await;
+        snapshot
+    }
+
+    pub async fn set_cluster_status(&self, cluster: ClusterStatus) -> IrisSnapshot {
+        let snapshot = {
+            let mut state = self.inner.write().await;
+            state.infra.cluster = Some(cluster);
+            state.snapshot()
+        };
+        self.broadcast_only(&snapshot).await;
+        snapshot
+    }
+
+    pub async fn set_open_prs(&self, prs: Vec<GitHubPrSummary>) -> IrisSnapshot {
+        let snapshot = {
+            let mut state = self.inner.write().await;
+            state.infra.open_prs = prs;
+            state.snapshot()
+        };
+        self.broadcast_only(&snapshot).await;
+        snapshot
     }
 
     pub async fn set_weather(&self, weather: WeatherForecast) -> IrisSnapshot {
@@ -822,6 +942,9 @@ mod tests {
             mails: vec![],
             events: vec![],
             deck_buttons: vec![],
+            comms: CommsStatus::default(),
+            shopping_list: vec![],
+            drive_orders: vec![],
             settings: IrisSettings::default(),
             active_screen_id: Some("org-overview".to_string()),
         }

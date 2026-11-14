@@ -1,7 +1,10 @@
 use chrono::Utc;
 use serde_json::Value;
 
-use crate::model::{ActiveAlert, AlertSeverity, OrgEvent, OrgMail, ScreenType};
+use crate::model::{
+    ActiveAlert, AlertSeverity, CommsStatus, DriveOrder, OrgEvent, OrgMail, ScreenType,
+    ShoppingItem,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IrisCommand {
@@ -37,6 +40,9 @@ pub enum IrisCommand {
     },
     UpsertMail(OrgMail),
     UpsertEvent(OrgEvent),
+    UpdateComms(CommsStatus),
+    UpsertShoppingItem(ShoppingItem),
+    UpsertDriveOrder(DriveOrder),
 }
 
 /// Parses incoming MQTT topic/payload pairs into strongly-typed [`IrisCommand`] values.
@@ -58,6 +64,9 @@ impl MqttCommandParser {
             "note" => parse_note_command(trimmed),
             "mail" => parse_mail_command(trimmed),
             "event" => parse_event_command(trimmed),
+            "comms" => parse_comms_command(trimmed),
+            "shopping" => parse_shopping_command(trimmed),
+            "cleardrive" => parse_cleardrive_command(trimmed),
             _ => None,
         }
     }
@@ -453,6 +462,117 @@ fn parse_event_command(payload: &str) -> Option<IrisCommand> {
         end_time,
         location,
         source: "mqtt".to_string(),
+    }))
+}
+
+fn parse_comms_command(payload: &str) -> Option<IrisCommand> {
+    let obj = parse_json_object(payload)?;
+    let missed_calls = obj.get("missedCalls").and_then(Value::as_u64).unwrap_or(0) as u32;
+    let voicemails = obj.get("voicemails").and_then(Value::as_u64).unwrap_or(0) as u32;
+    let teams_unread = obj.get("teamsUnread").and_then(Value::as_u64).unwrap_or(0) as u32;
+    let mails_unread = obj.get("mailsUnread").and_then(Value::as_u64).unwrap_or(0) as u32;
+    let missed_call_details = obj
+        .get("missedCallDetails")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let voicemail_details = obj
+        .get("voicemailDetails")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Some(IrisCommand::UpdateComms(CommsStatus {
+        missed_calls,
+        missed_call_details,
+        voicemails,
+        voicemail_details,
+        teams_unread,
+        mails_unread,
+        updated_at_epoch_ms: Utc::now().timestamp_millis(),
+    }))
+}
+
+fn parse_shopping_command(payload: &str) -> Option<IrisCommand> {
+    if payload.is_empty() {
+        return None;
+    }
+    let Some(obj) = parse_json_object(payload) else {
+        return Some(IrisCommand::UpsertShoppingItem(ShoppingItem {
+            id: format!("shop-{}", Utc::now().timestamp_millis()),
+            name: payload.to_string(),
+            completed: false,
+        }));
+    };
+    let name = obj
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?
+        .to_string();
+    let id = obj
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("shop-{}", Utc::now().timestamp_millis()));
+    let completed = obj
+        .get("completed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    Some(IrisCommand::UpsertShoppingItem(ShoppingItem {
+        id,
+        name,
+        completed,
+    }))
+}
+
+fn parse_cleardrive_command(payload: &str) -> Option<IrisCommand> {
+    let obj = parse_json_object(payload)?;
+    let status = obj
+        .get("status")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?
+        .to_string();
+    let store = obj
+        .get("store")
+        .and_then(Value::as_str)
+        .unwrap_or("ClearDrive")
+        .to_string();
+    let pickup_slot = obj
+        .get("pickupSlot")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let ready_for_pickup = obj
+        .get("readyForPickup")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let id = obj
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("drive-{}", Utc::now().timestamp_millis()));
+    Some(IrisCommand::UpsertDriveOrder(DriveOrder {
+        id,
+        store,
+        status,
+        pickup_slot,
+        ready_for_pickup,
     }))
 }
 
