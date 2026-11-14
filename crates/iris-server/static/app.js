@@ -258,6 +258,34 @@ function formatShortDate(iso) {
   }
 }
 
+function getWeekDays() {
+  const now = new Date();
+  const todayIso = toLocalIsoDate(now);
+  const day = now.getDay(); // 0=Sun..6=Sat
+  const diffToMon = (day === 0 ? -6 : 1) - day;
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() + diffToMon);
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i);
+    const iso = toLocalIsoDate(d);
+    const weekday = d.toLocaleDateString("fr-FR", { weekday: "short" }).replace(".", "");
+    days.push({
+      iso,
+      dayNum: d.getDate(),
+      weekday: weekday.charAt(0).toUpperCase() + weekday.slice(1),
+      isToday: iso === todayIso,
+    });
+  }
+  return days;
+}
+
+function toLocalIsoDate(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 function renderOrgOverview(stage, snap) {
   const now = new Date();
   const timeStr = now.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
@@ -309,9 +337,24 @@ function renderOrgOverview(stage, snap) {
             </div>
           </div>
           <div class="card">
-            <h3>📅 Planning de la semaine (${events.length})</h3>
-            <div style="margin-top:8px;">
-              ${events.length ? events.map((e) => `<div style="margin-bottom:6px;"><span style="color:var(--primary);font-weight:600;">${escapeHtml(formatShortDate(e.date))} ${escapeHtml(e.startTime)}</span> — ${escapeHtml(e.title)}</div>`).join("") : "<span style='color:var(--muted)'>Aucun événement configuré (ajoutez une URL .ics dans Réglages).</span>"}
+            <div class="row" style="justify-content:space-between;align-items:center;">
+              <h3>📅 Planning de la semaine (${events.length})</h3>
+              <button class="btn" id="btn-hub-open-agenda" style="padding:4px 10px;font-size:12px;">Voir / Ajouter →</button>
+            </div>
+            <div class="week-strip">
+              ${getWeekDays().map((d) => {
+                const count = (snap.org?.events || []).filter((e) => e.date === d.iso).length;
+                return `
+                  <div class="week-pill ${d.isToday ? "today" : ""}">
+                    <div style="color:${d.isToday ? "var(--primary)" : "var(--muted)"};font-weight:700;">${d.weekday}</div>
+                    <div style="font-size:14px;font-weight:800;margin:2px 0;">${d.dayNum}</div>
+                    <div style="color:${count > 0 ? "var(--ok)" : "var(--muted)"};font-weight:600;">${count > 0 ? `${count} evt` : "Libre"}</div>
+                  </div>
+                `;
+              }).join("")}
+            </div>
+            <div style="margin-top:10px;">
+              ${events.length ? events.map((e) => `<div style="margin-bottom:6px;"><span style="color:var(--primary);font-weight:600;">${escapeHtml(formatShortDate(e.date))} ${escapeHtml(e.startTime)}</span> — ${escapeHtml(e.title)}</div>`).join("") : "<span style='color:var(--muted);font-size:13px;'>Aucun événement saisi cette semaine. Cliquez sur « Voir / Ajouter » ou connectez votre URL .ics.</span>"}
             </div>
           </div>
           <div class="card">
@@ -324,6 +367,10 @@ function renderOrgOverview(stage, snap) {
       </div>
     </div>
   `;
+  const btnAgenda = document.getElementById("btn-hub-open-agenda");
+  if (btnAgenda) {
+    btnAgenda.onclick = () => api("/api/screen/select", "POST", { target: "org-agenda" });
+  }
   const launchers = document.getElementById("hub-launchers");
   snap.screens.filter((s) => s.enabled).forEach((s) => {
     const btn = document.createElement("button");
@@ -507,34 +554,61 @@ function renderLifeInfra(stage, snap) {
 function renderOrgAgenda(stage, snap) {
   const mails = snap.org?.mails || [];
   const events = snap.org?.events || [];
+  const weekDays = getWeekDays();
+  const icalUrl = snap.settings?.org?.icalUrl || "";
+  const todayIso = toLocalIsoDate(new Date());
 
   stage.innerHTML = `
     <div class="org-view">
       <div class="row" style="justify-content:space-between;margin-bottom:16px;">
-        <h2>Planning de la semaine & Mails du jour</h2>
-        <button class="btn primary" id="btn-org-refresh">↻ Actualiser Météo & iCal</button>
+        <div>
+          <h2>Planning de la semaine & Mails du jour</h2>
+          <div style="color:var(--muted);font-size:13px;">${icalUrl ? "Agenda iCal connecté • Synchro auto toutes les 10 min" : "Aucun agenda .ics configuré — ajoutez votre lien iCal ou créez des événements ci-dessous"}</div>
+        </div>
+        <div class="row">
+          ${!icalUrl ? `<button class="btn" id="btn-agenda-open-settings">⚙️ Connecter iCal (.ics)</button>` : ""}
+          <button class="btn primary" id="btn-org-refresh">↻ Actualiser Météo & iCal</button>
+        </div>
       </div>
-      ${renderWeatherCard(snap.org?.weather)}
-      <div class="grid-2" style="margin-top:16px;height:auto;">
-        <div class="col">
-          <div class="card">
-            <h3 style="margin-bottom:10px;">📅 Planning de la semaine</h3>
-            <div class="row" style="margin-bottom:12px;">
-              <input id="evt-title" placeholder="Événement…" style="flex:2;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:8px;" />
-              <input id="evt-date" type="date" value="${new Date().toISOString().slice(0, 10)}" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:8px;" />
-              <input id="evt-time" placeholder="09:00" style="width:72px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:8px;" />
-              <button class="btn primary" id="btn-add-evt">+</button>
-            </div>
-            ${events.length ? events.map((e) => `
-              <div class="note-row">
-                <div>
-                  <strong style="color:var(--primary);">${escapeHtml(formatShortDate(e.date))} ${escapeHtml(e.startTime)}${e.endTime ? "-" + escapeHtml(e.endTime) : ""}</strong>
-                  <div>${escapeHtml(e.title)} ${e.location ? `<span style="color:var(--muted);font-size:12px;">(${escapeHtml(e.location)})</span>` : ""}</div>
-                </div>
-                ${e.source !== "ical" ? `<button class="btn danger" onclick="api('/api/org/events/${encodeURIComponent(e.id)}','DELETE')">Suppr.</button>` : `<span style="font-size:11px;color:var(--muted);">iCal</span>`}
-              </div>
-            `).join("") : "<p style='color:var(--muted)'>Aucun événement cette semaine.</p>"}
+
+      <div class="card" style="margin-bottom:16px;">
+        <div class="row" style="justify-content:space-between;margin-bottom:12px;">
+          <h3>📅 Semaine en cours (Lun → Dim)</h3>
+          <div class="row">
+            <input id="evt-title" placeholder="Nouvel événement…" style="width:200px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:8px;" />
+            <input id="evt-date" type="date" value="${todayIso}" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:8px;" />
+            <input id="evt-time" placeholder="09:00" style="width:74px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:8px;" />
+            <button class="btn primary" id="btn-add-evt">+ Ajouter</button>
           </div>
+        </div>
+        <div class="week-grid">
+          ${weekDays.map((d) => {
+            const dayEvents = events.filter((e) => e.date === d.iso);
+            return `
+              <div class="week-day ${d.isToday ? "today" : ""}" data-date="${d.iso}">
+                <div class="week-day-head">
+                  <span style="color:${d.isToday ? "var(--primary)" : "var(--text)"}">${d.weekday} ${d.dayNum}</span>
+                  ${d.isToday ? `<span style="font-size:10px;background:var(--primary);color:#041e2b;padding:1px 6px;border-radius:999px;">Auj.</span>` : `<span style="color:var(--muted);font-weight:400;">${dayEvents.length || ""}</span>`}
+                </div>
+                ${dayEvents.length ? dayEvents.map((e) => `
+                  <div class="evt-chip">
+                    <div style="display:flex;justify-content:space-between;gap:4px;align-items:center;">
+                      <strong style="color:var(--primary);">${escapeHtml(e.startTime || "Journée")}${e.endTime ? "-" + escapeHtml(e.endTime) : ""}</strong>
+                      ${e.source !== "ical" ? `<button class="btn danger evt-del-btn" data-id="${escapeHtml(e.id)}" style="padding:1px 5px;font-size:10px;">✕</button>` : ""}
+                    </div>
+                    <div style="margin-top:2px;">${escapeHtml(e.title)}</div>
+                    ${e.location ? `<div style="color:var(--muted);font-size:11px;">${escapeHtml(e.location)}</div>` : ""}
+                  </div>
+                `).join("") : `<div style="color:var(--muted);font-size:12px;margin:auto 0;text-align:center;opacity:0.7;">Libre</div>`}
+              </div>
+            `;
+          }).join("")}
+        </div>
+      </div>
+
+      <div class="grid-2" style="height:auto;">
+        <div class="col">
+          ${renderWeatherCard(snap.org?.weather)}
         </div>
         <div class="col">
           <div class="card">
@@ -561,6 +635,23 @@ function renderOrgAgenda(stage, snap) {
   `;
 
   document.getElementById("btn-org-refresh").onclick = () => api("/api/org/refresh", "POST");
+  const openCfgBtn = document.getElementById("btn-agenda-open-settings");
+  if (openCfgBtn) {
+    openCfgBtn.onclick = () => document.getElementById("btn-settings").click();
+  }
+  document.querySelectorAll(".week-day").forEach((col) => {
+    col.onclick = (ev) => {
+      if (ev.target.closest(".evt-del-btn")) return;
+      document.getElementById("evt-date").value = col.dataset.date;
+      document.getElementById("evt-title").focus();
+    };
+  });
+  document.querySelectorAll(".evt-del-btn").forEach((btn) => {
+    btn.onclick = (ev) => {
+      ev.stopPropagation();
+      api(`/api/org/events/${encodeURIComponent(btn.dataset.id)}`, "DELETE");
+    };
+  });
   document.getElementById("btn-add-evt").onclick = () => {
     const title = document.getElementById("evt-title").value.trim();
     const date = document.getElementById("evt-date").value;
