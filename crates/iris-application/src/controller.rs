@@ -580,6 +580,16 @@ impl IrisController {
         snapshot
     }
 
+    pub async fn set_shopping_list(&self, items: Vec<ShoppingItem>) -> IrisSnapshot {
+        let (snapshot, persisted) = {
+            let mut state = self.inner.write().await;
+            state.shopping_list = items;
+            (state.snapshot(), state.to_persisted())
+        };
+        self.persist_and_broadcast(&persisted, &snapshot).await;
+        snapshot
+    }
+
     pub async fn upsert_shopping_item(&self, item: ShoppingItem) -> IrisSnapshot {
         let (snapshot, persisted) = {
             let mut state = self.inner.write().await;

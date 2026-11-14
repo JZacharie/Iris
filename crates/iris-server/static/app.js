@@ -357,7 +357,10 @@ function renderLifeInfra(stage, snap) {
       <div class="grid-2">
         <div class="col">
           <div class="card">
-            <h3>📞 Téléphone & Messagerie</h3>
+            <div class="row" style="justify-content:space-between;align-items:center;">
+              <h3>📞 Téléphone & Messagerie</h3>
+              <button class="btn" id="btn-ack-comms" style="padding:4px 10px;font-size:12px;">✓ Acquitter</button>
+            </div>
             <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:12px;">
               <div class="metric-card">
                 <div style="color:var(--muted);font-size:12px;">Appels en absence</div>
@@ -458,6 +461,16 @@ function renderLifeInfra(stage, snap) {
   `;
 
   document.getElementById("btn-refresh-infra").onclick = () => api("/api/org/refresh", "POST");
+
+  document.getElementById("btn-ack-comms").onclick = () =>
+    api("/api/comms/status", "POST", {
+      missedCalls: 0,
+      missedCallDetails: [],
+      voicemails: 0,
+      voicemailDetails: [],
+      teamsUnread: 0,
+      mailsUnread: 0,
+    });
 
   document.getElementById("btn-add-shop").onclick = () => {
     const input = document.getElementById("shop-new-name");
@@ -666,6 +679,7 @@ document.getElementById("btn-settings").onclick = () => {
   document.getElementById("cfg-rot-sec").value = s.rotationIntervalSeconds;
   document.getElementById("cfg-weather-city").value = s.org?.weatherCity || "Lyon";
   document.getElementById("cfg-ical-url").value = s.org?.icalUrl || "";
+  document.getElementById("cfg-github-repos").value = (s.org?.githubRepos || []).join(", ");
   document.getElementById("cfg-mqtt-enabled").checked = s.mqtt.enabled;
   document.getElementById("cfg-rot-enabled").checked = s.rotationEnabled;
   document.getElementById("modal-settings").classList.add("open");
@@ -681,9 +695,14 @@ document.getElementById("btn-save-settings").onclick = () => {
   s.mqtt.enabled = document.getElementById("cfg-mqtt-enabled").checked;
   s.rotationEnabled = document.getElementById("cfg-rot-enabled").checked;
   s.rotationIntervalSeconds = parseInt(document.getElementById("cfg-rot-sec").value, 10) || 45;
-  s.org = s.org || { weatherCity: "Lyon", weatherLat: "45.7640", weatherLon: "4.8357", icalUrl: "" };
+  s.org = s.org || { weatherCity: "Lyon", weatherLat: "45.7640", weatherLon: "4.8357", icalUrl: "", githubRepos: [] };
   s.org.weatherCity = document.getElementById("cfg-weather-city").value.trim() || "Lyon";
   s.org.icalUrl = document.getElementById("cfg-ical-url").value.trim();
+  s.org.githubRepos = document
+    .getElementById("cfg-github-repos")
+    .value.split(",")
+    .map((r) => r.trim())
+    .filter(Boolean);
   api("/api/settings", "POST", s);
   closeModal("modal-settings");
 };

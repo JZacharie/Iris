@@ -98,3 +98,19 @@ jobs:
             -t "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}" \
             "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-amd64" \
             "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-arm64"
+
+  build-pc-agent-windows:
+    name: Build PC Agent (Windows x64)
+    needs: [check]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build iris-pc-agent
+        run: cargo build --release -p iris-pc-agent
+      - name: Upload iris-pc-agent.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: iris-pc-agent-windows-x64
+          path: target/release/iris-pc-agent.exe
