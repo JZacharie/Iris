@@ -18,7 +18,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: jzacharie/iris
   CARGO_TERM_COLOR: always
 
 jobs:
@@ -79,3 +79,22 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-${{ matrix.arch }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  publish-manifest:
+    name: Publish Multi-Arch Manifest
+    needs: [build-and-push]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create latest and sha manifests
+        run: |
+          docker buildx imagetools create \
+            -t "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" \
+            -t "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}" \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-amd64" \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-arm64"
