@@ -11,13 +11,10 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
-authors = ["Joseph Zacharie"]
 
 [workspace.dependencies]
 tokio = { version = "1.43", features = ["full"] }
 axum = { version = "0.8", features = ["ws"] }
-tower = { version = "0.5", features = ["full"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "compression-gzip"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

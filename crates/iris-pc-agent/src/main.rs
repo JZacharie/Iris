@@ -38,11 +38,7 @@ async fn main() -> anyhow::Result<()> {
             let cpu_percent = sys.global_cpu_usage().round() as u32;
             let ram_total_mb = sys.total_memory() / (1024 * 1024);
             let ram_used_mb = sys.used_memory() / (1024 * 1024);
-            let ram_percent = if ram_total_mb > 0 {
-                ((ram_used_mb * 100) / ram_total_mb) as u32
-            } else {
-                0
-            };
+            let ram_percent = (ram_used_mb * 100).checked_div(ram_total_mb).unwrap_or(0) as u32;
             let active_meeting = detect_active_meeting(&sys);
             let hostname = System::host_name().unwrap_or_else(|| "Windows-PC".to_string());
 
