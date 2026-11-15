@@ -548,6 +548,10 @@ pub struct HaPowerPlug {
 #[serde(rename_all = "camelCase")]
 pub struct HaEnergy {
     pub solar_now_w: Option<i32>,
+    #[serde(default)]
+    pub home_consumption_w: Option<i32>,
+    #[serde(default)]
+    pub net_grid_w: Option<i32>,
     pub solar_today_kwh: String,
     pub forecast_today_kwh: String,
     pub forecast_tomorrow_kwh: String,

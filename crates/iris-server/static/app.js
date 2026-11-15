@@ -725,9 +725,9 @@ function renderOrgHome(stage, snap) {
         </div>
 
         <div class="kpi-card">
-          <div class="kpi-label"><span>☀️ Solaire Enphase</span><span>Prod. jour</span></div>
-          <div class="kpi-value" style="color:var(--warn)">${energy.solarNowW != null ? `${energy.solarNowW} W` : "—"}</div>
-          <div class="kpi-sub">Aujourd'hui : <strong>${escapeHtml(energy.solarTodayKwh || "—")} kWh</strong></div>
+          <div class="kpi-label"><span>☀️ Solaire & Conso Enphase</span><span>${energy.homeConsumptionW != null ? `Conso ${(energy.homeConsumptionW / 1000).toFixed(2)} kW` : "Prod. jour"}</span></div>
+          <div class="kpi-value" style="color:${(energy.homeConsumptionW || 0) > 7000 && (energy.solarNowW || 0) <= 0 ? "var(--crit)" : "var(--warn)"}">${energy.solarNowW != null ? `${energy.solarNowW} W` : "—"}</div>
+          <div class="kpi-sub">Maison : <strong>${energy.homeConsumptionW != null ? `${(energy.homeConsumptionW / 1000).toFixed(2)} kW` : "—"}</strong> • Prod. auj. : <strong>${escapeHtml(energy.solarTodayKwh || "—")} kWh</strong></div>
           <div class="kpi-sub">Prév. Auj: ${escapeHtml(energy.forecastTodayKwh || "—")} • Dem: ${escapeHtml(energy.forecastTomorrowKwh || "—")} kWh</div>
         </div>
 
@@ -1194,7 +1194,7 @@ function renderOrgOverview(stage, snap) {
               <div>☸️ Cluster jo3 : <strong style="color:${offlineCount > 0 ? "var(--crit)" : "var(--ok)"}">${cluster ? `${cluster.nodesReady}/${cluster.nodesTotal} Ready` : "—"}</strong></div>
               <div>🔀 PRs GitHub : <strong>${openPrs.length}</strong></div>
               <div>🚙 Volvo EX40 : <strong>${ha?.vehicle?.batteryPct != null ? `${ha.vehicle.batteryPct}% (${ha.vehicle.rangeKm ?? "—"} km)` : "—"}</strong></div>
-              <div>🏡 Présence / Solaire : <strong>${ha?.connected ? `${homeCount} à la maison • ${ha.energy?.solarNowW ?? 0} W` : "—"}</strong></div>
+              <div>🏡 Présence / Énergie : <strong>${ha?.connected ? `${homeCount} à la maison • ${ha.energy?.homeConsumptionW != null ? `${(ha.energy.homeConsumptionW / 1000).toFixed(1)} kW` : "—"} (☀️ ${ha.energy?.solarNowW ?? 0} W)` : "—"}</strong></div>
               <div>🚀 ArgoCD : <strong style="color:${(argo?.degraded || 0) > 0 ? "var(--crit)" : "var(--ok)"}">${argo ? `${argo.healthy}/${argo.total} Healthy` : "—"}</strong></div>
               <div>🚨 Alertes K8s : <strong style="color:${(kAlerts?.criticalCount || 0) > 0 ? "var(--crit)" : "var(--ok)"}">${kAlerts ? `${kAlerts.criticalCount} crit / ${kAlerts.warningCount} warn` : "—"}</strong></div>
             </div>

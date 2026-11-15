@@ -65,6 +65,30 @@ impl AlexaMcpClient {
 
         parse_alexa_items_json(&body)
     }
+
+    pub async fn announce(&self, message: &str) -> Result<()> {
+        let trimmed = message.trim();
+        if trimmed.is_empty() {
+            return Ok(());
+        }
+        let url = format!("{}/api/alexa/announce", self.base_url);
+        let resp = self
+            .http
+            .post(&url)
+            .json(&serde_json::json!({ "message": trimmed }))
+            .send()
+            .await
+            .map_err(|e| IrisError::Persistence(format!("alexa-mcp announce failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(IrisError::Persistence(format!(
+                "alexa-mcp announce returned HTTP {status}: {body}"
+            )));
+        }
+        Ok(())
+    }
 }
 
 impl Default for AlexaMcpClient {

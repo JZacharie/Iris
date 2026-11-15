@@ -1,12 +1,71 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use chrono::Utc;
 use iris_application::IrisController;
+use iris_core::{ActiveAlert, AlertSeverity};
 use iris_infrastructure::{
     AlexaMcpClient, AmarakiClient, EcoleDirecteClient, GitHubClient, HomeAssistantClient,
     IcalClient, K8sClient, KusanagiClient, OpenMeteoClient, SlackClient,
 };
 use tracing::{debug, warn};
+
+const POWER_OVERLOAD_THRESHOLD_W: i32 = 7000;
+const POWER_CONFIRM_DURATION: Duration = Duration::from_secs(55);
+const POWER_NOTIFY_COOLDOWN: Duration = Duration::from_secs(600);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PowerAlertTransition {
+    None,
+    Trigger { consumption_w: i32, solar_w: i32 },
+    Clear,
+}
+
+#[derive(Default)]
+struct PowerOverloadMonitor {
+    consecutive_high: u32,
+    first_high_at: Option<Instant>,
+    last_notified_at: Option<Instant>,
+    alert_active: bool,
+}
+
+impl PowerOverloadMonitor {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn evaluate(&mut self, consumption_w: i32, solar_w: i32, now: Instant) -> PowerAlertTransition {
+        let overloaded_no_solar = consumption_w > POWER_OVERLOAD_THRESHOLD_W && solar_w <= 0;
+        if !overloaded_no_solar {
+            self.consecutive_high = 0;
+            self.first_high_at = None;
+            if self.alert_active {
+                self.alert_active = false;
+                return PowerAlertTransition::Clear;
+            }
+            return PowerAlertTransition::None;
+        }
+
+        self.consecutive_high = self.consecutive_high.saturating_add(1);
+        let first_at = *self.first_high_at.get_or_insert(now);
+
+        if self.consecutive_high >= 2 && now.duration_since(first_at) >= POWER_CONFIRM_DURATION {
+            let cooldown_elapsed = self
+                .last_notified_at
+                .is_none_or(|prev| now.duration_since(prev) >= POWER_NOTIFY_COOLDOWN);
+            if cooldown_elapsed {
+                self.last_notified_at = Some(now);
+                self.alert_active = true;
+                return PowerAlertTransition::Trigger {
+                    consumption_w,
+                    solar_w,
+                };
+            }
+        }
+
+        PowerAlertTransition::None
+    }
+}
 
 pub fn spawn_org_sync_loop(controller: Arc<IrisController>) {
     let fast_ctrl = Arc::clone(&controller);
@@ -15,8 +74,19 @@ pub fn spawn_org_sync_loop(controller: Arc<IrisController>) {
         let kusanagi = KusanagiClient::from_env();
         let slack = SlackClient::from_env();
         let amaraki = AmarakiClient::from_env();
+        let alexa = AlexaMcpClient::new();
+        let mut power_monitor = PowerOverloadMonitor::new();
         loop {
-            refresh_fast_once(&fast_ctrl, &ha, &kusanagi, &slack, &amaraki).await;
+            refresh_fast_once(
+                &fast_ctrl,
+                &ha,
+                &kusanagi,
+                &slack,
+                &amaraki,
+                &alexa,
+                Some(&mut power_monitor),
+            )
+            .await;
             tokio::time::sleep(Duration::from_secs(60)).await;
         }
     });
@@ -57,7 +127,7 @@ pub async fn refresh_org_now(controller: Arc<IrisController>) {
     let ecoledirecte = EcoleDirecteClient::from_env();
 
     tokio::join!(
-        refresh_fast_once(&controller, &ha, &kusanagi, &slack, &amaraki),
+        refresh_fast_once(&controller, &ha, &kusanagi, &slack, &amaraki, &alexa, None),
         refresh_slow_once(
             &controller,
             &weather,
@@ -76,6 +146,8 @@ async fn refresh_fast_once(
     kusanagi: &KusanagiClient,
     slack: &SlackClient,
     amaraki: &AmarakiClient,
+    alexa: &AlexaMcpClient,
+    power_monitor: Option<&mut PowerOverloadMonitor>,
 ) {
     let ha_fut = async {
         if !ha.is_configured() {
@@ -122,6 +194,11 @@ async fn refresh_fast_once(
 
     let (ha_data, kus_data, slack_msgs, amaraki_reports) =
         tokio::join!(ha_fut, kus_fut, slack_fut, amaraki_fut);
+    let power_sample = ha_data.as_ref().and_then(|d| {
+        d.energy
+            .home_consumption_w
+            .map(|c| (c, d.energy.solar_now_w.unwrap_or(0)))
+    });
     if ha_data.is_some() || kus_data.is_some() || slack_msgs.is_some() {
         controller
             .apply_fast_telemetry(ha_data, kus_data, slack_msgs)
@@ -129,6 +206,53 @@ async fn refresh_fast_once(
     }
     if let Some(reports) = amaraki_reports {
         controller.merge_agent_reports(reports).await;
+    }
+    if let (Some(monitor), Some((consumption_w, solar_w))) = (power_monitor, power_sample) {
+        match monitor.evaluate(consumption_w, solar_w, Instant::now()) {
+            PowerAlertTransition::Trigger {
+                consumption_w,
+                solar_w,
+            } => {
+                let kw = f64::from(consumption_w) / 1000.0;
+                let tts_msg = format!(
+                    "Attention ! La consommation électrique de la maison est de {kw:.1} kilowatts sans production solaire. La consommation est trop importante et nous risquons une coupure de courant imminente."
+                );
+                let alert = ActiveAlert {
+                    id: "energy-overload-7kw".to_string(),
+                    severity: AlertSeverity::Critical,
+                    title: "⚡ Surconsommation > 7 kW (Risque coupure)".to_string(),
+                    message: format!(
+                        "Consommation : {kw:.2} kW • Solaire : {solar_w} W (2 validations consécutives). Risque de coupure de courant imminente !"
+                    ),
+                    source: "energy-guard".to_string(),
+                    dashboard_url: None,
+                    screen_id: Some("org-home".to_string()),
+                    triggered_at_epoch_ms: Utc::now().timestamp_millis(),
+                    acknowledged: false,
+                };
+                controller.trigger_alert(alert).await;
+                let (alexa_res, ha_res) =
+                    tokio::join!(alexa.announce(&tts_msg), ha.notify_power_overload(&tts_msg));
+                if let Err(err) = alexa_res {
+                    warn!(%err, "Alexa MCP announce failed for power overload alert");
+                }
+                if let Err(err) = ha_res {
+                    warn!(%err, "Home Assistant notification failed for power overload alert");
+                }
+            }
+            PowerAlertTransition::Clear => {
+                if controller
+                    .snapshot()
+                    .await
+                    .active_alert
+                    .as_ref()
+                    .is_some_and(|a| a.source == "energy-guard")
+                {
+                    controller.clear_alert().await;
+                }
+            }
+            PowerAlertTransition::None => {}
+        }
     }
 }
 
@@ -201,4 +325,49 @@ async fn refresh_slow_once(
         tokio::join!(weather_fut, ical_fut, k8s_fut, prs_fut, alexa_fut, ed_fut);
 
     controller.apply_slow_feeds(w, ic, k, prs, shop, ed).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn power_overload_requires_two_consecutive_validations_and_one_minute() {
+        let mut monitor = PowerOverloadMonitor::new();
+        let t0 = Instant::now();
+
+        // 1st validation > 7000 W without solar does NOT trigger immediately
+        assert_eq!(monitor.evaluate(7500, 0, t0), PowerAlertTransition::None);
+
+        // 2nd validation too early (< 55s) does NOT trigger yet
+        assert_eq!(
+            monitor.evaluate(7600, 0, t0 + Duration::from_secs(30)),
+            PowerAlertTransition::None
+        );
+
+        // Consecutive validation at >= 60s triggers alert
+        assert_eq!(
+            monitor.evaluate(7800, 0, t0 + Duration::from_secs(60)),
+            PowerAlertTransition::Trigger {
+                consumption_w: 7800,
+                solar_w: 0
+            }
+        );
+
+        // Cooldown suppresses repeated notifications during ongoing overload
+        assert_eq!(
+            monitor.evaluate(7900, 0, t0 + Duration::from_secs(120)),
+            PowerAlertTransition::None
+        );
+
+        // Solar production or drop below 7 kW clears the alert
+        assert_eq!(
+            monitor.evaluate(7900, 300, t0 + Duration::from_secs(180)),
+            PowerAlertTransition::Clear
+        );
+        assert_eq!(
+            monitor.evaluate(6500, 0, t0 + Duration::from_secs(240)),
+            PowerAlertTransition::None
+        );
+    }
 }

@@ -95,6 +95,72 @@ impl HomeAssistantClient {
 
         parse_ha_states_json(&body, Utc::now().timestamp_millis())
     }
+
+    pub async fn notify_power_overload(&self, message: &str) -> Result<()> {
+        if !self.is_configured() {
+            return Err(IrisError::InvalidConfig(
+                "IRIS_HOME_ASSISTANT_TOKEN not configured".to_string(),
+            ));
+        }
+
+        let title = "⚡ Alerte Surconsommation Maison (> 7 kW)";
+        let alexa_service = env::var("IRIS_HA_ALEXA_NOTIFY_SERVICE")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "notify/alexa_media".to_string());
+
+        let _ = self
+            .call_notify_service(
+                &alexa_service,
+                serde_json::json!({
+                    "message": message,
+                    "title": title,
+                    "data": { "type": "announce", "method": "all" }
+                }),
+            )
+            .await;
+
+        let _ = self
+            .call_notify_service(
+                "notify/persistent_notification",
+                serde_json::json!({
+                    "title": title,
+                    "message": message,
+                    "notification_id": "iris_power_overload_7kw"
+                }),
+            )
+            .await;
+
+        self.call_notify_service(
+            "notify/notify",
+            serde_json::json!({
+                "title": title,
+                "message": message
+            }),
+        )
+        .await
+    }
+
+    async fn call_notify_service(&self, service_path: &str, payload: Value) -> Result<()> {
+        let trimmed = service_path.trim().trim_start_matches('/');
+        let url = format!("{}/api/services/{trimmed}", self.base_url);
+        let resp = self
+            .http
+            .post(&url)
+            .bearer_auth(&self.token)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| IrisError::Persistence(format!("HA service {trimmed} failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            return Err(IrisError::Persistence(format!(
+                "HA service {trimmed} returned status {}",
+                resp.status()
+            )));
+        }
+        Ok(())
+    }
 }
 
 impl Default for HomeAssistantClient {
@@ -202,24 +268,33 @@ fn extract_vehicle(by_id: &HashMap<&str, &HaRawState>) -> Option<HaVehicle> {
     })
 }
 
+fn parse_power_w(by_id: &HashMap<&str, &HaRawState>, entity_id: &str) -> Option<i32> {
+    let s = valid_state(by_id, entity_id)?;
+    let val = s.state.trim().parse::<f64>().ok()?;
+    let unit = s
+        .attributes
+        .get("unit_of_measurement")
+        .and_then(|v| v.as_str())
+        .unwrap_or("W");
+    if unit.eq_ignore_ascii_case("kW") {
+        Some((val * 1000.0).round() as i32)
+    } else {
+        Some(val.round() as i32)
+    }
+}
+
 fn extract_energy(by_id: &HashMap<&str, &HaRawState>, states: &[HaRawState]) -> HaEnergy {
-    let solar_now_w = valid_state(by_id, "sensor.envoy_122304017410_current_power_production")
-        .and_then(|s| {
-            let val = s.state.trim().parse::<f64>().ok()?;
-            let unit = s
-                .attributes
-                .get("unit_of_measurement")
-                .and_then(|v| v.as_str())
-                .unwrap_or("W");
-            if unit.eq_ignore_ascii_case("kW") {
-                Some((val * 1000.0).round() as i32)
-            } else {
-                Some(val.round() as i32)
-            }
-        })
-        .or_else(|| {
-            valid_state(by_id, "sensor.power_production_now").and_then(|s| parse_i32(&s.state))
-        });
+    let solar_now_w = parse_power_w(by_id, "sensor.envoy_122304017410_current_power_production")
+        .or_else(|| parse_power_w(by_id, "sensor.power_production_now"));
+
+    let home_consumption_w =
+        parse_power_w(by_id, "sensor.envoy_122304017410_current_power_consumption")
+            .or_else(|| parse_power_w(by_id, "sensor.power_consumption_now"));
+
+    let net_grid_w = parse_power_w(
+        by_id,
+        "sensor.envoy_122304017410_current_net_power_consumption",
+    );
 
     let solar_today_kwh = valid_state(by_id, "sensor.envoy_122304017410_today_s_energy_production")
         .map(|s| format_decimal(&s.state, 1))
@@ -241,6 +316,7 @@ fn extract_energy(by_id: &HashMap<&str, &HaRawState>, states: &[HaRawState]) -> 
                 && s.attributes.get("device_class").and_then(|v| v.as_str()) == Some("power")
                 && !s.entity_id.contains("hourly")
                 && !s.entity_id.contains("production")
+                && !s.entity_id.contains("consumption")
                 && !s.entity_id.contains("battery_power")
         })
         .filter_map(|s| {
@@ -262,6 +338,8 @@ fn extract_energy(by_id: &HashMap<&str, &HaRawState>, states: &[HaRawState]) -> 
 
     HaEnergy {
         solar_now_w,
+        home_consumption_w,
+        net_grid_w,
         solar_today_kwh,
         forecast_today_kwh,
         forecast_tomorrow_kwh,
@@ -421,6 +499,24 @@ mod tests {
             assert_eq!(data.nas.as_ref().and_then(|n| n.cpu_pct), Some(47));
             assert_eq!(data.devices.covers_open, 1);
             assert_eq!(data.devices.covers_total, 2);
+        }
+    }
+
+    #[test]
+    fn parses_envoy_kw_consumption_and_solar() {
+        let json = r#"[
+          {"entity_id":"sensor.envoy_122304017410_current_power_production","state":"0.0","attributes":{"unit_of_measurement":"kW","device_class":"power"}},
+          {"entity_id":"sensor.envoy_122304017410_current_power_consumption","state":"8.356","attributes":{"unit_of_measurement":"kW","device_class":"power"}},
+          {"entity_id":"sensor.envoy_122304017410_current_net_power_consumption","state":"8.356","attributes":{"unit_of_measurement":"kW","device_class":"power"}}
+        ]"#;
+
+        let parsed = parse_ha_states_json(json, 1_700_000_000_000);
+        assert!(parsed.is_ok());
+        if let Ok(data) = parsed {
+            assert_eq!(data.energy.solar_now_w, Some(0));
+            assert_eq!(data.energy.home_consumption_w, Some(8356));
+            assert_eq!(data.energy.net_grid_w, Some(8356));
+            assert!(data.energy.plugs.is_empty());
         }
     }
 }
