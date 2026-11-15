@@ -1000,25 +1000,143 @@ function formatShortDate(iso) {
   }
 }
 
-function getWeekDays() {
+function getEasterDate(year) {
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(year, month - 1, day);
+}
+
+function getFrenchHolidayName(dateObj) {
+  const y = dateObj.getFullYear();
+  const mmdd = `${String(dateObj.getMonth() + 1).padStart(2, "0")}-${String(dateObj.getDate()).padStart(2, "0")}`;
+  const fixed = {
+    "01-01": "Jour de l'an",
+    "05-01": "Fête du Travail",
+    "05-08": "Victoire 1945",
+    "07-14": "Fête nationale",
+    "08-15": "Assomption",
+    "11-01": "Toussaint",
+    "11-11": "Armistice 1918",
+    "12-25": "Noël"
+  };
+  if (fixed[mmdd]) return fixed[mmdd];
+
+  const easter = getEasterDate(y);
+  const addDaysIso = (base, offset) => toLocalIsoDate(new Date(base.getFullYear(), base.getMonth(), base.getDate() + offset));
+  const targetIso = toLocalIsoDate(dateObj);
+  if (targetIso === addDaysIso(easter, 1)) return "Lundi de Pâques";
+  if (targetIso === addDaysIso(easter, 39)) return "Ascension";
+  if (targetIso === addDaysIso(easter, 50)) return "Lundi de Pentecôte";
+  return null;
+}
+
+function getWeekDays(count = 7) {
   const now = new Date();
   const todayIso = toLocalIsoDate(now);
-  const day = now.getDay(); // 0=Sun..6=Sat
-  const diffToMon = (day === 0 ? -6 : 1) - day;
-  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() + diffToMon);
   const days = [];
-  for (let i = 0; i < 7; i++) {
-    const d = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i);
+  for (let i = 0; i < count; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i);
     const iso = toLocalIsoDate(d);
+    const dow = d.getDay(); // 0=Dim..6=Sam
     const weekday = d.toLocaleDateString("fr-FR", { weekday: "short" }).replace(".", "");
+    const monthShort = d.toLocaleDateString("fr-FR", { month: "short" }).replace(".", "");
+    const holidayName = getFrenchHolidayName(d);
     days.push({
       iso,
+      dow,
       dayNum: d.getDate(),
+      monthShort,
       weekday: weekday.charAt(0).toUpperCase() + weekday.slice(1),
       isToday: iso === todayIso,
+      isWeekend: dow === 0 || dow === 6,
+      holidayName,
+      isHoliday: Boolean(holidayName)
     });
   }
   return days;
+}
+
+function getRecurringFamilyEvents(days) {
+  const out = [];
+  days.forEach((d) => {
+    if (d.dow === 1 || d.dow === 3) {
+      out.push({
+        id: `rec-capmo-${d.iso}`,
+        title: "🏢 Capmo",
+        date: d.iso,
+        startTime: "09:00",
+        endTime: "",
+        location: "Capmo",
+        source: "recurring"
+      });
+    }
+    if (d.dow === 3) {
+      out.push({
+        id: `rec-alice-theatre-${d.iso}`,
+        title: "🎭 Alice — Théâtre",
+        date: d.iso,
+        startTime: "14:00",
+        endTime: "",
+        location: "Après-midi",
+        source: "recurring"
+      });
+    }
+    if (d.dow === 5) {
+      out.push({
+        id: `rec-victor-handisport-${d.iso}`,
+        title: "🏅 Victor — Handisport",
+        date: d.iso,
+        startTime: "19:30",
+        endTime: "",
+        location: "Handisport",
+        source: "recurring"
+      });
+    }
+  });
+  return out;
+}
+
+function getRollingEvents(snap, days) {
+  const isoSet = new Set(days.map((d) => d.iso));
+  const base = (snap.org?.events || []).filter((e) => isoSet.has(e.date));
+  const recurring = getRecurringFamilyEvents(days);
+  return [...base, ...recurring].sort((a, b) => {
+    const cmpDate = (a.date || "").localeCompare(b.date || "");
+    if (cmpDate !== 0) return cmpDate;
+    return (a.startTime || "99:99").localeCompare(b.startTime || "99:99");
+  });
+}
+
+function getEdDayBounds(dayEvents) {
+  const byChild = new Map();
+  dayEvents.forEach((e) => {
+    if (e.source !== "ecoledirecte") return;
+    if (!e.startTime || (e.title || "").startsWith("[ANNULÉ]")) return;
+    const match = /^\[([^\]]+)\]\s*/.exec(e.title || "");
+    const child = match ? match[1] : "Enfants";
+    const end = e.endTime || e.startTime;
+    const prev = byChild.get(child);
+    if (!prev) {
+      byChild.set(child, { child, startTime: e.startTime, endTime: end, count: 1 });
+    } else {
+      if (e.startTime < prev.startTime) prev.startTime = e.startTime;
+      if (end > prev.endTime) prev.endTime = end;
+      prev.count += 1;
+    }
+  });
+  return Array.from(byChild.values());
 }
 
 function toLocalIsoDate(d) {
@@ -1034,7 +1152,9 @@ function renderOrgOverview(stage, snap) {
   const dateStr = now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
   const notes = snap.notes.filter((n) => !n.done).slice(0, 4);
   const mails = (snap.org?.mails || []).slice(0, 4);
-  const events = (snap.org?.events || []).slice(0, 4);
+  const rollingDays = getWeekDays(7);
+  const allRollingEvents = getRollingEvents(snap, rollingDays);
+  const events = allRollingEvents.slice(0, 5);
   const comms = snap.comms || {};
   const shopPending = (snap.shoppingList || []).filter((i) => !i.completed).length;
   const driveReady = (snap.driveOrders || []).filter((o) => o.readyForPickup).length;
@@ -1090,23 +1210,38 @@ function renderOrgOverview(stage, snap) {
           </div>
           <div class="card">
             <div class="row" style="justify-content:space-between;align-items:center;">
-              <h3>📅 Planning de la semaine (${events.length})</h3>
+              <h3>📅 7 prochains jours (${allRollingEvents.length})</h3>
               <button class="btn" id="btn-hub-open-agenda" style="padding:4px 10px;font-size:12px;">Voir / Ajouter →</button>
             </div>
             <div class="week-strip">
-              ${getWeekDays().map((d) => {
-                const count = (snap.org?.events || []).filter((e) => e.date === d.iso).length;
+              ${rollingDays.map((d) => {
+                const dayEvts = allRollingEvents.filter((e) => e.date === d.iso);
+                const edBounds = getEdDayBounds(dayEvts);
+                const pillClass = [
+                  "week-pill",
+                  d.isToday ? "today" : "",
+                  d.isWeekend ? "weekend" : "",
+                  d.isHoliday ? "holiday" : ""
+                ].filter(Boolean).join(" ");
+                const headerColor = d.isToday
+                  ? "var(--primary)"
+                  : d.isHoliday
+                    ? "#fcd34d"
+                    : d.isWeekend
+                      ? "#c4b5fd"
+                      : "var(--muted)";
                 return `
-                  <div class="week-pill ${d.isToday ? "today" : ""}">
-                    <div style="color:${d.isToday ? "var(--primary)" : "var(--muted)"};font-weight:700;">${d.weekday}</div>
+                  <div class="${pillClass}" title="${escapeHtml(d.holidayName || "")}">
+                    <div style="color:${headerColor};font-weight:700;">${d.weekday}</div>
                     <div style="font-size:14px;font-weight:800;margin:2px 0;">${d.dayNum}</div>
-                    <div style="color:${count > 0 ? "var(--ok)" : "var(--muted)"};font-weight:600;">${count > 0 ? `${count} evt` : "Libre"}</div>
+                    ${d.isHoliday ? `<div style="font-size:10px;color:#fcd34d;font-weight:700;">🇫🇷 Férié</div>` : ""}
+                    ${edBounds.length ? edBounds.map((b) => `<div style="font-size:10px;color:#e9d5ff;font-weight:600;">${escapeHtml(b.startTime)}→${escapeHtml(b.endTime)}</div>`).join("") : `<div style="color:${dayEvts.length > 0 ? "var(--ok)" : "var(--muted)"};font-weight:600;">${dayEvts.length > 0 ? `${dayEvts.length} evt` : "Libre"}</div>`}
                   </div>
                 `;
               }).join("")}
             </div>
             <div style="margin-top:10px;">
-              ${events.length ? events.map((e) => `<div style="margin-bottom:6px;"><span style="color:var(--primary);font-weight:600;">${escapeHtml(formatShortDate(e.date))} ${escapeHtml(e.startTime)}</span> — ${escapeHtml(e.title)}</div>`).join("") : "<span style='color:var(--muted);font-size:13px;'>Aucun événement saisi cette semaine. Cliquez sur « Voir / Ajouter » ou connectez votre URL .ics.</span>"}
+              ${events.length ? events.map((e) => `<div style="margin-bottom:6px;"><span style="color:var(--primary);font-weight:600;">${escapeHtml(formatShortDate(e.date))} ${escapeHtml(e.startTime)}</span> — ${escapeHtml(e.title)}</div>`).join("") : "<span style='color:var(--muted);font-size:13px;'>Aucun événement prévu sur les 7 prochains jours.</span>"}
             </div>
           </div>
           <div class="card">
@@ -1465,8 +1600,8 @@ function renderLifeInfra(stage, snap) {
 
 function renderOrgAgenda(stage, snap) {
   const mails = snap.org?.mails || [];
-  const events = snap.org?.events || [];
-  const weekDays = getWeekDays();
+  const weekDays = getWeekDays(7);
+  const events = getRollingEvents(snap, weekDays);
   const icalUrl = snap.settings?.org?.icalUrl || "";
   const ed = snap.org?.ecoledirecte;
   const todayIso = toLocalIsoDate(new Date());
@@ -1481,7 +1616,7 @@ function renderOrgAgenda(stage, snap) {
     <div class="org-view">
       <div class="row" style="justify-content:space-between;margin-bottom:16px;">
         <div>
-          <h2>Planning de la semaine & ÉcoleDirecte</h2>
+          <h2>Planning 7 jours glissants & ÉcoleDirecte</h2>
           <div class="row" style="margin-top:4px;">
             <span style="color:var(--muted);font-size:13px;">${icalUrl ? "Agenda iCal connecté • Synchro auto" : "Ajoutez un lien iCal ou configurez ÉcoleDirecte"}</span>
             ${edBadge}
@@ -1495,7 +1630,16 @@ function renderOrgAgenda(stage, snap) {
 
       <div class="card" style="margin-bottom:16px;">
         <div class="row" style="justify-content:space-between;margin-bottom:12px;">
-          <h3>📅 Semaine en cours (Lun → Dim)</h3>
+          <div>
+            <h3>📅 7 prochains jours (glissant à partir d'aujourd'hui)</h3>
+            <div class="row" style="gap:8px;margin-top:6px;font-size:11px;">
+              <span class="badge" style="background:rgba(56,189,248,0.16);color:var(--primary);">Aujourd'hui</span>
+              <span class="badge" style="background:rgba(139,92,246,0.18);color:#c4b5fd;">Week-end</span>
+              <span class="badge" style="background:rgba(245,158,11,0.20);color:#fde68a;">🇫🇷 Jour férié</span>
+              <span class="badge" style="background:rgba(34,197,94,0.16);color:#86efac;">Famille / Récurrent</span>
+              <span class="badge" style="background:rgba(168,85,247,0.2);color:#e9d5ff;">🎓 Début → Fin ÉcoleDirecte</span>
+            </div>
+          </div>
           <div class="row">
             <input id="evt-title" placeholder="Nouvel événement…" style="width:200px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:8px;" />
             <input id="evt-date" type="date" value="${todayIso}" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:8px;" />
@@ -1506,20 +1650,55 @@ function renderOrgAgenda(stage, snap) {
         <div class="week-grid">
           ${weekDays.map((d) => {
             const dayEvents = events.filter((e) => e.date === d.iso);
+            const edBounds = getEdDayBounds(dayEvents);
+            const dayClass = [
+              "week-day",
+              d.isToday ? "today" : "",
+              d.isWeekend ? "weekend" : "",
+              d.isHoliday ? "holiday" : ""
+            ].filter(Boolean).join(" ");
+            const titleColor = d.isToday
+              ? "var(--primary)"
+              : d.isHoliday
+                ? "#fde68a"
+                : d.isWeekend
+                  ? "#c4b5fd"
+                  : "var(--text)";
+            const headBadge = d.isToday
+              ? `<span style="font-size:10px;background:var(--primary);color:#041e2b;padding:1px 6px;border-radius:999px;">Auj.</span>`
+              : d.isHoliday
+                ? `<span style="font-size:10px;background:rgba(245,158,11,0.28);color:#fde68a;padding:1px 6px;border-radius:999px;">Férié</span>`
+                : d.isWeekend
+                  ? `<span style="font-size:10px;background:rgba(139,92,246,0.28);color:#ddd6fe;padding:1px 6px;border-radius:999px;">WE</span>`
+                  : `<span style="color:var(--muted);font-weight:400;">${dayEvents.length || ""}</span>`;
             return `
-              <div class="week-day ${d.isToday ? "today" : ""}" data-date="${d.iso}">
+              <div class="${dayClass}" data-date="${d.iso}">
                 <div class="week-day-head">
-                  <span style="color:${d.isToday ? "var(--primary)" : "var(--text)"}">${d.weekday} ${d.dayNum}</span>
-                  ${d.isToday ? `<span style="font-size:10px;background:var(--primary);color:#041e2b;padding:1px 6px;border-radius:999px;">Auj.</span>` : `<span style="color:var(--muted);font-weight:400;">${dayEvents.length || ""}</span>`}
+                  <span style="color:${titleColor}">${d.weekday} ${d.dayNum} ${escapeHtml(d.monthShort)}</span>
+                  ${headBadge}
                 </div>
+                ${d.holidayName ? `<div style="font-size:11px;color:#fde68a;font-weight:700;">🇫🇷 ${escapeHtml(d.holidayName)}</div>` : ""}
+                ${edBounds.length ? `
+                  <div class="ed-bounds-box">
+                    <div style="color:#e9d5ff;font-weight:700;margin-bottom:2px;">🏫 ÉcoleDirecte</div>
+                    ${edBounds.map((b) => `
+                      <div style="display:flex;justify-content:space-between;gap:4px;">
+                        <span>${escapeHtml(b.child)}</span>
+                        <strong>${escapeHtml(b.startTime)} → ${escapeHtml(b.endTime)}</strong>
+                      </div>
+                    `).join("")}
+                  </div>
+                ` : ""}
                 ${dayEvents.length ? dayEvents.map((e) => {
                   const isEd = e.source === "ecoledirecte";
+                  const isRecurring = e.source === "recurring";
                   const isCancelled = e.title.startsWith("[ANNULÉ]");
+                  const timeColor = isEd ? "#c084fc" : isRecurring ? "#86efac" : "var(--primary)";
                   return `
-                  <div class="evt-chip ${isEd ? "ed" : ""} ${isCancelled ? "cancelled" : ""}">
+                  <div class="evt-chip ${isEd ? "ed" : ""} ${isRecurring ? "recurring" : ""} ${isCancelled ? "cancelled" : ""}">
                     <div style="display:flex;justify-content:space-between;gap:4px;align-items:center;">
-                      <strong style="color:${isEd ? "#c084fc" : "var(--primary)"};">${escapeHtml(e.startTime || "Journée")}${e.endTime ? "-" + escapeHtml(e.endTime) : ""}</strong>
-                      ${e.source !== "ical" && !isEd ? `<button class="btn danger evt-del-btn" data-id="${escapeHtml(e.id)}" style="padding:1px 5px;font-size:10px;">✕</button>` : ""}
+                      <strong style="color:${timeColor};">${escapeHtml(e.startTime || "Journée")}${e.endTime ? "-" + escapeHtml(e.endTime) : ""}</strong>
+                      ${e.source !== "ical" && !isEd && !isRecurring ? `<button class="btn danger evt-del-btn" data-id="${escapeHtml(e.id)}" style="padding:1px 5px;font-size:10px;">✕</button>` : ""}
                     </div>
                     <div style="margin-top:2px;">${isEd ? "🎓 " : ""}${escapeHtml(e.title)}</div>
                     ${e.location ? `<div style="color:var(--muted);font-size:11px;">📍 ${escapeHtml(e.location)}</div>` : ""}
