@@ -471,6 +471,7 @@ fn parse_comms_command(payload: &str) -> Option<IrisCommand> {
     let voicemails = obj.get("voicemails").and_then(Value::as_u64).unwrap_or(0) as u32;
     let teams_unread = obj.get("teamsUnread").and_then(Value::as_u64).unwrap_or(0) as u32;
     let mails_unread = obj.get("mailsUnread").and_then(Value::as_u64).unwrap_or(0) as u32;
+    let slack_unread = obj.get("slackUnread").and_then(Value::as_u64).unwrap_or(0) as u32;
     let missed_call_details = obj
         .get("missedCallDetails")
         .and_then(Value::as_array)
@@ -499,6 +500,8 @@ fn parse_comms_command(payload: &str) -> Option<IrisCommand> {
         voicemail_details,
         teams_unread,
         mails_unread,
+        slack_unread,
+        slack_messages: Vec::new(),
         updated_at_epoch_ms: Utc::now().timestamp_millis(),
     }))
 }
