@@ -194,7 +194,7 @@ impl JsonFileRepository {
                 id: "grafana-alerts".to_string(),
                 name: "Grafana Cluster".to_string(),
                 screen_type: ScreenType::Grafana,
-                url: "https://grafana.p.zacharie.org/d/b9b5adf3-6cdb-409d-86ae-0482e25fc165/k8s-dashboard".to_string(),
+                url: "https://grafana.zacharie.org/d/b9b5adf3-6cdb-409d-86ae-0482e25fc165/k8s-dashboard".to_string(),
                 kiosk_mode: true,
                 auto_refresh_seconds: 60,
                 enabled: true,

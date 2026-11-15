@@ -81,15 +81,15 @@ function renderAlert(alert) {
 }
 
 const GRAFANA_DASHBOARDS = [
-  { label: "☸️ K8S Cluster", url: "https://grafana.p.zacharie.org/d/b9b5adf3-6cdb-409d-86ae-0482e25fc165/k8s-dashboard" },
-  { label: "🖥️ Nodes Full", url: "https://grafana.p.zacharie.org/d/rYdddlPWk/node-exporter-full" },
-  { label: "🚀 ArgoCD", url: "https://grafana.p.zacharie.org/d/qPkgGHg7k/argocd" },
-  { label: "🚨 Alertmanager", url: "https://grafana.p.zacharie.org/d/eea-9_sik/alertmanager" },
-  { label: "🐝 Cilium", url: "https://grafana.p.zacharie.org/d/cilium-metrics/cilium-metrics" },
-  { label: "🐘 CloudNativePG", url: "https://grafana.p.zacharie.org/d/cloudnative-pg/cloudnativepg" },
-  { label: "🔀 Traefik", url: "https://grafana.p.zacharie.org/d/n5bu_kv45/traefik-official-standalone-dashboard" },
-  { label: "🎮 NVIDIA GPU", url: "https://grafana.p.zacharie.org/d/Oxed_c6Wz2/nvidia-dcgm-exporter-dashboard" },
-  { label: "🛡️ Trivy Security", url: "https://grafana.p.zacharie.org/d/trivy-security-overview/trivy-security-dashboard" }
+  { label: "☸️ K8S Cluster", url: "https://grafana.zacharie.org/d/b9b5adf3-6cdb-409d-86ae-0482e25fc165/k8s-dashboard" },
+  { label: "🖥️ Nodes Full", url: "https://grafana.zacharie.org/d/rYdddlPWk/node-exporter-full" },
+  { label: "🚀 ArgoCD", url: "https://grafana.zacharie.org/d/qPkgGHg7k/argocd" },
+  { label: "🚨 Alertmanager", url: "https://grafana.zacharie.org/d/eea-9_sik/alertmanager" },
+  { label: "🐝 Cilium", url: "https://grafana.zacharie.org/d/cilium-metrics/cilium-metrics" },
+  { label: "🐘 CloudNativePG", url: "https://grafana.zacharie.org/d/cloudnative-pg/cloudnativepg" },
+  { label: "🔀 Traefik", url: "https://grafana.zacharie.org/d/n5bu_kv45/traefik-official-standalone-dashboard" },
+  { label: "🎮 NVIDIA GPU", url: "https://grafana.zacharie.org/d/Oxed_c6Wz2/nvidia-dcgm-exporter-dashboard" },
+  { label: "🛡️ Trivy Security", url: "https://grafana.zacharie.org/d/trivy-security-overview/trivy-security-dashboard" }
 ];
 
 function renderStage(snap) {
