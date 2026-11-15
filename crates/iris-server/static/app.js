@@ -31,6 +31,7 @@ const SCREEN_ICONS = {
   ORG_OVERVIEW: "🏠",
   ORG_HOME: "⚡",
   ORG_LIFE_INFRA: "☸️",
+  ORG_AGENTS: "🤖",
   ORG_NEWS: "📰",
   ORG_AGENDA: "📅",
   ORG_NOTES: "📌",
@@ -45,6 +46,12 @@ function screenBadge(s, snap) {
   if (s.type === "ORG_LIFE_INFRA") {
     const unread = (snap.comms?.slackUnread || 0) + (snap.comms?.missedCalls || 0) + (snap.comms?.voicemails || 0);
     return unread > 0 ? String(unread) : "";
+  }
+  if (s.type === "ORG_AGENTS") {
+    const reports = snap.agentReports || [];
+    const running = reports.filter((r) => r.status === "running").length;
+    if (running > 0) return `${running}⏳`;
+    return reports.length > 0 ? String(reports.length) : "";
   }
   if (s.type === "ORG_NEWS") {
     const cnt = (snap.infra?.kusanagi?.news || []).length;
@@ -220,11 +227,351 @@ function renderStage(snap) {
   if (screen.type === "ORG_OVERVIEW") renderOrgOverview(stage, snap);
   else if (screen.type === "ORG_HOME") renderOrgHome(stage, snap);
   else if (screen.type === "ORG_LIFE_INFRA") renderLifeInfra(stage, snap);
+  else if (screen.type === "ORG_AGENTS") renderOrgAgents(stage, snap);
   else if (screen.type === "ORG_NEWS") renderOrgNews(stage, snap);
   else if (screen.type === "ORG_STREAM_DECK") renderStreamDeck(stage, snap);
   else if (screen.type === "ORG_AGENDA") renderOrgAgenda(stage, snap);
   else if (screen.type === "ORG_NOTES") renderOrgNotes(stage, snap);
   else if (screen.type === "ORG_CLOCK") renderOrgClock(stage);
+}
+
+let activeAgentsFilter = "ALL";
+let showTriggerAgentForm = false;
+let expandedReportIds = new Set();
+let collapsedReportIds = new Set();
+let agentTriggerStatusMsg = "";
+
+const UPGRADE_AGENTS = new Set(["antigravity-pr-updater", "gitops-upgrader", "github-pr-manager"]);
+const DEV_AGENTS = new Set(["antigravity-dev", "antigravity-cli"]);
+
+function formatAgentStatusMeta(r) {
+  if (r.status === "running") {
+    return { css: "running", pillText: "⏳ En cours" };
+  }
+  if (r.status === "succeeded") {
+    if (r.isRealSuccess === false) {
+      return { css: "warning", pillText: "⚠️ Succès partiel" };
+    }
+    return { css: "succeeded", pillText: "✅ Succès" };
+  }
+  return { css: "failed", pillText: "❌ Échec" };
+}
+
+function formatDurationSecs(secs) {
+  if (secs == null || Number.isNaN(Number(secs))) return "—";
+  const s = Math.max(0, Math.round(Number(secs)));
+  if (s < 60) return `${s}s`;
+  const mins = Math.floor(s / 60);
+  const rem = s % 60;
+  return `${mins}m ${rem}s`;
+}
+
+function renderRecentAgentReportsCard(snap, btnId, hideIfEmpty) {
+  const reports = snap.agentReports || [];
+  if (hideIfEmpty && !reports.length) return "";
+  return `
+    <div class="card">
+      <div class="row" style="justify-content:space-between;align-items:center;">
+        <h3>🤖 Derniers Rapports d'Agents & Upgrades (${reports.length})</h3>
+        <button class="btn" id="${escapeHtml(btnId)}" style="padding:4px 10px;font-size:12px;">Tout voir →</button>
+      </div>
+      <div style="margin-top:8px;">
+        ${reports.length ? reports.slice(0, 3).map((r) => {
+          const meta = formatAgentStatusMeta(r);
+          const ts = formatShortNewsDate(r.completedAt || r.startedAt);
+          const summary = r.summaryNote || r.prompt || r.id;
+          return `
+            <div style="padding:7px 0;border-bottom:1px solid var(--border);font-size:13px;">
+              <div class="row" style="justify-content:space-between;gap:8px;">
+                <div class="row" style="gap:6px;">
+                  <span class="report-status-pill ${meta.css}">${meta.pillText}</span>
+                  <strong>${escapeHtml(r.agentName || "agent")}</strong>
+                  ${r.model ? `<span class="badge">${escapeHtml(r.model)}</span>` : ""}
+                </div>
+                <span style="color:var(--muted);font-size:11px;">${escapeHtml(ts || "—")}</span>
+              </div>
+              <div style="margin-top:4px;color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(summary)}">${escapeHtml(summary)}</div>
+            </div>
+          `;
+        }).join("") : "<span style='color:var(--muted)'>Aucun rapport d'agent synchronisé pour le moment.</span>"}
+      </div>
+    </div>
+  `;
+}
+
+function matchesAgentFilter(r, filterKey) {
+  if (filterKey === "ALL") return true;
+  if (filterKey === "UPGRADES") {
+    return UPGRADE_AGENTS.has(r.agentName) || /upgrade|pr/i.test(r.agentName || "");
+  }
+  if (filterKey === "DEV") {
+    return DEV_AGENTS.has(r.agentName) || /dev|cli/i.test(r.agentName || "");
+  }
+  if (filterKey === "SUCCEEDED") {
+    return r.status === "succeeded" && r.isRealSuccess !== false;
+  }
+  if (filterKey === "FAILED") {
+    return r.status === "failed" || (r.status === "succeeded" && r.isRealSuccess === false);
+  }
+  return r.agentName === filterKey;
+}
+
+function renderOrgAgents(stage, snap) {
+  const reports = snap.agentReports || [];
+  const openPrs = snap.infra?.openPrs || [];
+  const totalCount = reports.length;
+  const succeededCount = reports.filter((r) => r.status === "succeeded" && r.isRealSuccess !== false).length;
+  const failedCount = reports.filter((r) => r.status === "failed" || (r.status === "succeeded" && r.isRealSuccess === false)).length;
+  const runningCount = reports.filter((r) => r.status === "running").length;
+
+  const latestUpgrade = reports.find((r) => UPGRADE_AGENTS.has(r.agentName) || /upgrade|pr/i.test(r.agentName || ""));
+  const latestDev = reports.find((r) => DEV_AGENTS.has(r.agentName) || /dev|cli/i.test(r.agentName || ""));
+  const latestUpgradeMeta = latestUpgrade ? formatAgentStatusMeta(latestUpgrade) : null;
+  const latestDevMeta = latestDev ? formatAgentStatusMeta(latestDev) : null;
+
+  const availableAgents = Array.from(new Set(reports.map((r) => r.agentName).filter(Boolean))).sort();
+  const staticFilters = [
+    { key: "ALL", label: `Tous (${totalCount})` },
+    { key: "UPGRADES", label: "🔄 Upgrades & PRs" },
+    { key: "DEV", label: "🛠️ Dev Antigravity" },
+    { key: "SUCCEEDED", label: `✅ Succès (${succeededCount})` },
+    { key: "FAILED", label: `⚠️ Échecs / Partiels (${failedCount})` }
+  ];
+  const validFilterKeys = new Set([...staticFilters.map((f) => f.key), ...availableAgents]);
+  if (!validFilterKeys.has(activeAgentsFilter)) {
+    activeAgentsFilter = "ALL";
+  }
+
+  const filtered = reports.filter((r) => matchesAgentFilter(r, activeAgentsFilter));
+
+  stage.innerHTML = `
+    <div class="org-view">
+      <div class="row" style="justify-content:space-between;margin-bottom:16px;">
+        <div>
+          <h2>🤖 Rapports Agents & Upgrades (Amaraki / Antigravity)</h2>
+          <div style="color:var(--muted);font-size:13px;">Historique persistant 24h & temps réel des missions PRs, upgrades GitOps et développements Antigravity sur jo3</div>
+        </div>
+        <div class="row">
+          <button class="btn primary" id="btn-launch-pr-upgrade">🚀 Lancer Upgrade PRs</button>
+          <button class="btn" id="btn-toggle-agent-form">${showTriggerAgentForm ? "✕ Fermer formulaire" : "🛠️ Nouvelle Mission Antigravity"}</button>
+          <button class="btn" id="btn-agents-refresh">↻ Synchroniser</button>
+        </div>
+      </div>
+
+      ${agentTriggerStatusMsg ? `
+        <div class="card" style="margin-bottom:14px;border-left:4px solid var(--primary);padding:10px 14px;">
+          <div class="row" style="justify-content:space-between;">
+            <span style="font-size:13px;">${escapeHtml(agentTriggerStatusMsg)}</span>
+            <button class="btn" id="btn-clear-agent-msg" style="padding:3px 9px;font-size:11px;">Fermer</button>
+          </div>
+        </div>
+      ` : ""}
+
+      ${showTriggerAgentForm ? `
+        <div class="card" id="agent-trigger-form" style="margin-bottom:16px;">
+          <h3 style="margin-bottom:10px;">🛠️ Lancer une mission Antigravity sur jo3 via Amaraki</h3>
+          <div class="row" style="align-items:flex-end;">
+            <div class="field" style="min-width:220px;">
+              <label>Agent cible</label>
+              <select id="agent-trigger-name">
+                <option value="antigravity-pr-updater">antigravity-pr-updater (PRs & Dépendances)</option>
+                <option value="antigravity-dev">antigravity-dev (Développement & Correctifs)</option>
+                <option value="antigravity-cli">antigravity-cli (Audit / CLI Antigravity)</option>
+                <option value="gitops-upgrader">gitops-upgrader (Helms & Manifests jo3)</option>
+                <option value="github-pr-manager">github-pr-manager (Revue & Merge PRs)</option>
+                <option value="audit-cluster">audit-cluster (Diagnostic Cluster jo3)</option>
+              </select>
+            </div>
+            <div class="field" style="flex:1;min-width:280px;">
+              <label>Prompt / Instructions de mission</label>
+              <input id="agent-trigger-prompt" placeholder="Ex: Mets à jour les PRs Dependabot sur jo3, Amaraki et Iris puis génère un rapport." />
+            </div>
+            <button class="btn primary" id="btn-submit-agent-trigger">Exécuter</button>
+          </div>
+        </div>
+      ` : ""}
+
+      <div class="kpi-grid-4">
+        <div class="kpi-card">
+          <div class="kpi-label"><span>Missions & Upgrades</span><span>🤖</span></div>
+          <div class="kpi-value">${totalCount}</div>
+          <div class="kpi-sub">✅ ${succeededCount} succès • ⚠️/❌ ${failedCount} • ⏳ ${runningCount} en cours</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label"><span>Dernier Upgrade PRs</span><span>🔄</span></div>
+          <div class="kpi-value" style="font-size:20px;">${latestUpgradeMeta ? latestUpgradeMeta.pillText : "—"}</div>
+          <div class="kpi-sub">${latestUpgrade ? `${escapeHtml(latestUpgrade.agentName)} • ${escapeHtml(formatShortNewsDate(latestUpgrade.completedAt || latestUpgrade.startedAt) || "—")}` : "Aucun upgrade récent"}</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label"><span>Dernier Dev Antigravity</span><span>🛠️</span></div>
+          <div class="kpi-value" style="font-size:20px;">${latestDevMeta ? latestDevMeta.pillText : "—"}</div>
+          <div class="kpi-sub">${latestDev ? `${escapeHtml(latestDev.agentName)} • ${escapeHtml(formatShortNewsDate(latestDev.completedAt || latestDev.startedAt) || "—")}` : "Aucune mission dev récente"}</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label"><span>PRs GitHub Ouvertes</span><span>🔀</span></div>
+          <div class="kpi-value" style="color:${openPrs.length > 0 ? "var(--primary)" : "var(--ok)"};">${openPrs.length}</div>
+          <div class="kpi-sub">Dépôts suivis par Iris</div>
+        </div>
+      </div>
+
+      <div class="news-filter-bar">
+        ${staticFilters.map((f) => `
+          <button class="btn ${activeAgentsFilter === f.key ? "primary" : ""} agent-filter-btn" data-filter="${escapeHtml(f.key)}">${escapeHtml(f.label)}</button>
+        `).join("")}
+        ${availableAgents.map((agent) => `
+          <button class="btn ${activeAgentsFilter === agent ? "primary" : ""} agent-filter-btn" data-filter="${escapeHtml(agent)}">🤖 ${escapeHtml(agent)}</button>
+        `).join("")}
+      </div>
+
+      <div class="reports-list">
+        ${filtered.length ? filtered.map((r, idx) => {
+          const meta = formatAgentStatusMeta(r);
+          const isExpanded = expandedReportIds.has(r.id) || (idx < 2 && !collapsedReportIds.has(r.id));
+          const startedLabel = formatShortNewsDate(r.startedAt) || r.startedAt || "—";
+          const completedLabel = r.completedAt ? (formatShortNewsDate(r.completedAt) || r.completedAt) : "En cours";
+          const outputText = (r.reportOutput || "").trim();
+          return `
+            <div class="report-card status-${meta.css}">
+              <div class="row" style="justify-content:space-between;align-items:flex-start;">
+                <div class="row" style="gap:8px;">
+                  <span class="report-status-pill ${meta.css}">${meta.pillText}</span>
+                  <strong style="font-size:15px;">${escapeHtml(r.agentName || "agent")}</strong>
+                  ${r.model ? `<span class="badge">🧠 ${escapeHtml(r.model)}</span>` : ""}
+                  ${r.channel ? `<span class="badge" style="background:rgba(148,163,184,0.16);color:var(--text);">📡 ${escapeHtml(r.channel)}</span>` : ""}
+                  <span style="color:var(--muted);font-size:12px;">Job: <code>${escapeHtml(r.id)}</code></span>
+                </div>
+                <div class="row" style="gap:10px;color:var(--muted);font-size:12px;">
+                  <span>⏱️ ${escapeHtml(formatDurationSecs(r.durationSecs))}</span>
+                  <span>🚀 ${escapeHtml(startedLabel)}</span>
+                  <span>🏁 ${escapeHtml(completedLabel)}</span>
+                </div>
+              </div>
+              ${r.prompt ? `<div class="report-prompt"><strong>Mission :</strong> ${escapeHtml(r.prompt)}</div>` : ""}
+              ${r.summaryNote ? `<div style="font-size:13px;color:var(--text);"><strong>Résumé :</strong> ${escapeHtml(r.summaryNote)}</div>` : ""}
+              ${outputText ? `
+                <div>
+                  <div class="row" style="justify-content:space-between;margin-bottom:6px;">
+                    <span style="font-size:12px;color:var(--muted);font-weight:600;">📄 Rapport complet d'exécution</span>
+                    <button class="btn toggle-report-btn" data-report-id="${escapeHtml(r.id)}" data-default-open="${idx < 2 ? "1" : "0"}" style="padding:4px 10px;font-size:12px;">
+                      ${isExpanded ? "▲ Réduire le rapport" : "▼ Afficher le rapport complet"}
+                    </button>
+                  </div>
+                  ${isExpanded ? `<pre class="report-pre">${escapeHtml(outputText)}</pre>` : ""}
+                </div>
+              ` : `<div style="font-size:12px;color:var(--muted);">${r.status === "running" ? "⏳ Collecte du rapport en cours après exécution du pod…" : "Aucun log ou rapport détaillé disponible."}</div>`}
+            </div>
+          `;
+        }).join("") : `
+          <div class="card">
+            <span style="color:var(--muted);">Aucun rapport d'agent ne correspond à ce filtre.</span>
+          </div>
+        `}
+      </div>
+    </div>
+  `;
+
+  const btnClearMsg = document.getElementById("btn-clear-agent-msg");
+  if (btnClearMsg) {
+    btnClearMsg.onclick = () => {
+      agentTriggerStatusMsg = "";
+      renderOrgAgents(stage, currentSnapshot || snap);
+    };
+  }
+
+  const btnLaunchUpgrade = document.getElementById("btn-launch-pr-upgrade");
+  if (btnLaunchUpgrade) {
+    btnLaunchUpgrade.onclick = async () => {
+      btnLaunchUpgrade.disabled = true;
+      btnLaunchUpgrade.textContent = "⏳ Lancement en cours…";
+      try {
+        const res = await api("/api/agents/trigger", "POST", {
+          agentName: "antigravity-pr-updater",
+          prompt: "Lance l'audit et la mise à jour autonome des PRs et dépendances des dépôts GitHub de JZacharie (jo3, helms, Amaraki, Iris, Kusanagi) avec rapport détaillé.",
+          channel: "iris-ui"
+        });
+        if (res?.error) {
+          agentTriggerStatusMsg = `❌ Erreur déclenchement Upgrade PRs : ${res.error}`;
+        } else {
+          agentTriggerStatusMsg = `🚀 Mission antigravity-pr-updater lancée (Job: ${res?.jobId || "créé"})`;
+          if (res?.snapshot) {
+            currentSnapshot = res.snapshot;
+          }
+        }
+      } catch (err) {
+        agentTriggerStatusMsg = `❌ Erreur réseau déclenchement : ${err?.message || err}`;
+      }
+      renderOrgAgents(stage, currentSnapshot || snap);
+    };
+  }
+
+  const btnToggleForm = document.getElementById("btn-toggle-agent-form");
+  if (btnToggleForm) {
+    btnToggleForm.onclick = () => {
+      showTriggerAgentForm = !showTriggerAgentForm;
+      renderOrgAgents(stage, currentSnapshot || snap);
+    };
+  }
+
+  const btnSubmitTrigger = document.getElementById("btn-submit-agent-trigger");
+  if (btnSubmitTrigger) {
+    btnSubmitTrigger.onclick = async () => {
+      const agentName = document.getElementById("agent-trigger-name")?.value || "antigravity-dev";
+      const prompt = document.getElementById("agent-trigger-prompt")?.value.trim() || "";
+      if (!prompt) {
+        agentTriggerStatusMsg = "⚠️ Veuillez saisir un prompt pour la mission Antigravity.";
+        renderOrgAgents(stage, currentSnapshot || snap);
+        return;
+      }
+      btnSubmitTrigger.disabled = true;
+      btnSubmitTrigger.textContent = "⏳ Lancement…";
+      try {
+        const res = await api("/api/agents/trigger", "POST", { agentName, prompt, channel: "iris-ui" });
+        if (res?.error) {
+          agentTriggerStatusMsg = `❌ Erreur : ${res.error}`;
+        } else {
+          agentTriggerStatusMsg = `🚀 Mission ${agentName} lancée (Job: ${res?.jobId || "créé"})`;
+          showTriggerAgentForm = false;
+          if (res?.snapshot) {
+            currentSnapshot = res.snapshot;
+          }
+        }
+      } catch (err) {
+        agentTriggerStatusMsg = `❌ Erreur réseau : ${err?.message || err}`;
+      }
+      renderOrgAgents(stage, currentSnapshot || snap);
+    };
+  }
+
+  const btnRefresh = document.getElementById("btn-agents-refresh");
+  if (btnRefresh) {
+    btnRefresh.onclick = async () => {
+      btnRefresh.textContent = "⏳ Synchro…";
+      await api("/api/org/refresh", "POST");
+    };
+  }
+
+  document.querySelectorAll(".agent-filter-btn").forEach((btn) => {
+    btn.onclick = () => {
+      activeAgentsFilter = btn.dataset.filter || "ALL";
+      renderOrgAgents(stage, currentSnapshot || snap);
+    };
+  });
+
+  document.querySelectorAll(".toggle-report-btn").forEach((btn) => {
+    btn.onclick = () => {
+      const id = btn.dataset.reportId;
+      const defaultOpen = btn.dataset.defaultOpen === "1";
+      const currentlyOpen = expandedReportIds.has(id) || (defaultOpen && !collapsedReportIds.has(id));
+      if (currentlyOpen) {
+        expandedReportIds.delete(id);
+        collapsedReportIds.add(id);
+      } else {
+        collapsedReportIds.delete(id);
+        expandedReportIds.add(id);
+      }
+      renderOrgAgents(stage, currentSnapshot || snap);
+    };
+  });
 }
 
 let selectedNewsSource = "ALL";
@@ -768,6 +1115,7 @@ function renderOrgOverview(stage, snap) {
               ${notes.length ? notes.map((n) => `<div style="margin-bottom:4px;">${n.pinned ? "📌 " : "• "}${escapeHtml(n.text)}</div>`).join("") : "<span style='color:var(--muted)'>Aucune tâche en attente.</span>"}
             </div>
           </div>
+          ${renderRecentAgentReportsCard(snap, "btn-hub-open-agents", true)}
           ${(kusanagi?.news?.length) ? `
           <div class="card">
             <div class="row" style="justify-content:space-between;align-items:center;">
@@ -788,6 +1136,10 @@ function renderOrgOverview(stage, snap) {
       </div>
     </div>
   `;
+  const btnAgentsHub = document.getElementById("btn-hub-open-agents");
+  if (btnAgentsHub) {
+    btnAgentsHub.onclick = () => api("/api/screen/select", "POST", { target: "org-agents" });
+  }
   const btnAgenda = document.getElementById("btn-hub-open-agenda");
   if (btnAgenda) {
     btnAgenda.onclick = () => api("/api/screen/select", "POST", { target: "org-agenda" });
@@ -1045,11 +1397,16 @@ function renderLifeInfra(stage, snap) {
               `).join("") : "<span style='color:var(--muted)'>Aucune PR ouverte sur les dépôts suivis.</span>"}
             </div>
           </div>
+          ${renderRecentAgentReportsCard(snap, "btn-infra-open-agents", false)}
         </div>
       </div>
     </div>
   `;
 
+  const btnAgentsInfra = document.getElementById("btn-infra-open-agents");
+  if (btnAgentsInfra) {
+    btnAgentsInfra.onclick = () => api("/api/screen/select", "POST", { target: "org-agents" });
+  }
   document.getElementById("btn-refresh-infra").onclick = () => api("/api/org/refresh", "POST");
   const btnPveUpdate = document.getElementById("btn-proxmox-update");
   if (btnPveUpdate) {

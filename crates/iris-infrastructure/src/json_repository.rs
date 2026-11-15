@@ -28,6 +28,7 @@ impl JsonFileRepository {
             comms: CommsStatus::default(),
             shopping_list: vec![],
             drive_orders: vec![],
+            agent_reports: vec![],
             settings: IrisSettings::default(),
             active_screen_id: Some("org-overview".to_string()),
         }
@@ -181,6 +182,16 @@ impl JsonFileRepository {
                 is_alert_target: false,
             },
             DisplayScreen {
+                id: "org-agents".to_string(),
+                name: "Agents & Upgrades".to_string(),
+                screen_type: ScreenType::OrgAgents,
+                url: String::new(),
+                kiosk_mode: true,
+                auto_refresh_seconds: 0,
+                enabled: true,
+                is_alert_target: false,
+            },
+            DisplayScreen {
                 id: "o2-overview".to_string(),
                 name: "OpenObserve".to_string(),
                 screen_type: ScreenType::OpenObserve,
@@ -312,6 +323,25 @@ impl StateRepository for JsonFileRepository {
                             id: "org-news".to_string(),
                             name: "Actualités".to_string(),
                             screen_type: ScreenType::OrgNews,
+                            url: String::new(),
+                            kiosk_mode: true,
+                            auto_refresh_seconds: 0,
+                            enabled: true,
+                            is_alert_target: false,
+                        },
+                    );
+                }
+                if !state
+                    .screens
+                    .iter()
+                    .any(|s| s.screen_type == ScreenType::OrgAgents)
+                {
+                    state.screens.insert(
+                        3.min(state.screens.len()),
+                        DisplayScreen {
+                            id: "org-agents".to_string(),
+                            name: "Agents & Upgrades".to_string(),
+                            screen_type: ScreenType::OrgAgents,
                             url: String::new(),
                             kiosk_mode: true,
                             auto_refresh_seconds: 0,

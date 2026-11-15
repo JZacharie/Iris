@@ -3,11 +3,12 @@ use std::time::Duration;
 
 use chrono::Utc;
 use iris_core::{
-    ActiveAlert, BarthesState, ClusterStatus, CommsStatus, DashboardUrlFormatter, DeckActionEvent,
-    DeckActionKind, DeckButton, DisplayScreen, DriveOrder, EcoleDirecteStatus, GitHubPrSummary,
-    HomeAssistantData, InfraStatus, IrisCommand, IrisPersistedState, IrisSettings, IrisSnapshot,
-    KusanagiInfraData, MqttCommandParser, MqttConnectionState, OrgEvent, OrgFeedData, OrgMail,
-    OrgNote, PcTelemetry, Result, ScreenType, ShoppingItem, SlackMessageItem, WeatherForecast,
+    ActiveAlert, AgentUpgradeReport, BarthesState, ClusterStatus, CommsStatus,
+    DashboardUrlFormatter, DeckActionEvent, DeckActionKind, DeckButton, DisplayScreen, DriveOrder,
+    EcoleDirecteStatus, GitHubPrSummary, HomeAssistantData, InfraStatus, IrisCommand,
+    IrisPersistedState, IrisSettings, IrisSnapshot, KusanagiInfraData, MqttCommandParser,
+    MqttConnectionState, OrgEvent, OrgFeedData, OrgMail, OrgNote, PcTelemetry, Result, ScreenType,
+    ShoppingItem, SlackMessageItem, WeatherForecast,
 };
 use tokio::sync::{broadcast, RwLock};
 use tracing::{info, warn};
@@ -28,6 +29,7 @@ struct InnerState {
     comms: CommsStatus,
     shopping_list: Vec<ShoppingItem>,
     drive_orders: Vec<DriveOrder>,
+    agent_reports: Vec<AgentUpgradeReport>,
     infra: InfraStatus,
     home_assistant: Option<HomeAssistantData>,
     ecoledirecte: Option<EcoleDirecteStatus>,
@@ -68,6 +70,7 @@ impl InnerState {
             comms: persisted.comms,
             shopping_list: persisted.shopping_list,
             drive_orders: persisted.drive_orders,
+            agent_reports: persisted.agent_reports,
             infra: InfraStatus::default(),
             home_assistant: None,
             ecoledirecte: None,
@@ -96,6 +99,7 @@ impl InnerState {
             comms: self.comms.clone(),
             shopping_list: self.shopping_list.clone(),
             drive_orders: self.drive_orders.clone(),
+            agent_reports: self.agent_reports.clone(),
             settings: self.settings.clone(),
             active_screen_id: self.active_screen.as_ref().map(|s| s.id.clone()),
         }
@@ -144,6 +148,7 @@ impl InnerState {
             drive_orders: self.drive_orders.clone(),
             infra: self.infra.clone(),
             home_assistant: self.home_assistant.clone(),
+            agent_reports: self.agent_reports.clone(),
             deck_buttons: self.deck_buttons.clone(),
             pc_telemetry: self.pc_telemetry.clone(),
             last_deck_action: self.last_deck_action.clone(),
@@ -195,6 +200,7 @@ fn compute_barthes_state(
                 | ScreenType::OrgLifeInfra
                 | ScreenType::OrgHome
                 | ScreenType::OrgNews
+                | ScreenType::OrgAgents
         )
     }) {
         return BarthesState::Studium;
@@ -667,6 +673,40 @@ impl IrisController {
         snapshot
     }
 
+    pub async fn upsert_agent_report(&self, report: AgentUpgradeReport) -> IrisSnapshot {
+        let (snapshot, persisted) = {
+            let mut state = self.inner.write().await;
+            upsert_agent_report_in_list(&mut state.agent_reports, report);
+            sort_and_trim_agent_reports(&mut state.agent_reports);
+            (state.snapshot(), state.to_persisted())
+        };
+        self.persist_and_broadcast(&persisted, &snapshot).await;
+        snapshot
+    }
+
+    pub async fn merge_agent_reports(&self, reports: Vec<AgentUpgradeReport>) -> IrisSnapshot {
+        let changed = {
+            let mut state = self.inner.write().await;
+            let previous = state.agent_reports.clone();
+            for report in reports {
+                upsert_agent_report_in_list(&mut state.agent_reports, report);
+            }
+            sort_and_trim_agent_reports(&mut state.agent_reports);
+            if state.agent_reports == previous {
+                None
+            } else {
+                Some((state.snapshot(), state.to_persisted()))
+            }
+        };
+        match changed {
+            Some((snapshot, persisted)) => {
+                self.persist_and_broadcast(&persisted, &snapshot).await;
+                snapshot
+            }
+            None => self.snapshot().await,
+        }
+    }
+
     pub async fn set_cluster_status(&self, cluster: ClusterStatus) -> IrisSnapshot {
         let snapshot = {
             let mut state = self.inner.write().await;
@@ -1053,6 +1093,39 @@ impl IrisController {
     }
 }
 
+fn upsert_agent_report_in_list(
+    list: &mut Vec<AgentUpgradeReport>,
+    mut incoming: AgentUpgradeReport,
+) {
+    if let Some(slot) = list.iter_mut().find(|r| r.id == incoming.id) {
+        if incoming.report_output.trim().is_empty() && !slot.report_output.trim().is_empty() {
+            incoming.report_output = slot.report_output.clone();
+        }
+        if incoming.summary_note.trim().is_empty() && !slot.summary_note.trim().is_empty() {
+            incoming.summary_note = slot.summary_note.clone();
+        }
+        if incoming.prompt.trim().is_empty() && !slot.prompt.trim().is_empty() {
+            incoming.prompt = slot.prompt.clone();
+        }
+        if incoming.completed_at.is_none() && slot.completed_at.is_some() {
+            incoming.completed_at = slot.completed_at.clone();
+        }
+        if incoming.duration_secs.is_none() && slot.duration_secs.is_some() {
+            incoming.duration_secs = slot.duration_secs;
+        }
+        *slot = incoming;
+    } else {
+        list.push(incoming);
+    }
+}
+
+fn sort_and_trim_agent_reports(list: &mut Vec<AgentUpgradeReport>) {
+    list.sort_by_key(|r| std::cmp::Reverse(r.updated_at_epoch_ms));
+    if list.len() > 50 {
+        list.truncate(50);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1101,6 +1174,7 @@ mod tests {
             comms: CommsStatus::default(),
             shopping_list: vec![],
             drive_orders: vec![],
+            agent_reports: vec![],
             settings: IrisSettings::default(),
             active_screen_id: Some("org-overview".to_string()),
         }
@@ -1181,5 +1255,68 @@ mod tests {
             .apply_fast_telemetry(None, Some(kusanagi), None)
             .await;
         assert_eq!(snap.barthes_state, BarthesState::Connotation);
+    }
+
+    #[tokio::test]
+    async fn upsert_and_merge_agent_reports() {
+        let controller = IrisController::new(sample_state(), Arc::new(InMemoryRepo));
+        let first = AgentUpgradeReport {
+            id: "antigravity-pr-updater-1".to_string(),
+            agent_name: "antigravity-pr-updater".to_string(),
+            model: "gemini-3.1-pro".to_string(),
+            channel: "#ai".to_string(),
+            prompt: "Update PRs".to_string(),
+            status: "succeeded".to_string(),
+            is_real_success: true,
+            summary_note: "Mission accomplie".to_string(),
+            report_output: "PR #12 updated".to_string(),
+            started_at: "2026-11-15T10:00:00Z".to_string(),
+            completed_at: Some("2026-11-15T10:01:00Z".to_string()),
+            duration_secs: Some(60),
+            updated_at_epoch_ms: 1000,
+        };
+        let snap1 = controller.upsert_agent_report(first).await;
+        assert_eq!(snap1.agent_reports.len(), 1);
+        assert_eq!(snap1.agent_reports[0].report_output, "PR #12 updated");
+
+        // Merging a newer report places it first and preserves existing output when omitted
+        let updated_first = AgentUpgradeReport {
+            id: "antigravity-pr-updater-1".to_string(),
+            agent_name: "antigravity-pr-updater".to_string(),
+            model: "gemini-3.1-pro".to_string(),
+            channel: "#ai".to_string(),
+            prompt: String::new(),
+            status: "succeeded".to_string(),
+            is_real_success: true,
+            summary_note: String::new(),
+            report_output: String::new(),
+            started_at: "2026-11-15T10:00:00Z".to_string(),
+            completed_at: None,
+            duration_secs: None,
+            updated_at_epoch_ms: 1500,
+        };
+        let second = AgentUpgradeReport {
+            id: "antigravity-dev-2".to_string(),
+            agent_name: "antigravity-dev".to_string(),
+            model: "gemini-3.1-pro".to_string(),
+            channel: "#ai".to_string(),
+            prompt: "Add Iris page".to_string(),
+            status: "running".to_string(),
+            is_real_success: true,
+            summary_note: String::new(),
+            report_output: String::new(),
+            started_at: "2026-11-15T12:00:00Z".to_string(),
+            completed_at: None,
+            duration_secs: None,
+            updated_at_epoch_ms: 2000,
+        };
+
+        let snap2 = controller
+            .merge_agent_reports(vec![updated_first, second])
+            .await;
+        assert_eq!(snap2.agent_reports.len(), 2);
+        assert_eq!(snap2.agent_reports[0].id, "antigravity-dev-2");
+        assert_eq!(snap2.agent_reports[1].id, "antigravity-pr-updater-1");
+        assert_eq!(snap2.agent_reports[1].report_output, "PR #12 updated");
     }
 }

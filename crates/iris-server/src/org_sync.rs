@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use iris_application::IrisController;
 use iris_infrastructure::{
-    AlexaMcpClient, EcoleDirecteClient, GitHubClient, HomeAssistantClient, IcalClient, K8sClient,
-    KusanagiClient, OpenMeteoClient, SlackClient,
+    AlexaMcpClient, AmarakiClient, EcoleDirecteClient, GitHubClient, HomeAssistantClient,
+    IcalClient, K8sClient, KusanagiClient, OpenMeteoClient, SlackClient,
 };
 use tracing::{debug, warn};
 
@@ -14,8 +14,9 @@ pub fn spawn_org_sync_loop(controller: Arc<IrisController>) {
         let ha = HomeAssistantClient::from_env();
         let kusanagi = KusanagiClient::from_env();
         let slack = SlackClient::from_env();
+        let amaraki = AmarakiClient::from_env();
         loop {
-            refresh_fast_once(&fast_ctrl, &ha, &kusanagi, &slack).await;
+            refresh_fast_once(&fast_ctrl, &ha, &kusanagi, &slack, &amaraki).await;
             tokio::time::sleep(Duration::from_secs(60)).await;
         }
     });
@@ -47,6 +48,7 @@ pub async fn refresh_org_now(controller: Arc<IrisController>) {
     let ha = HomeAssistantClient::from_env();
     let kusanagi = KusanagiClient::from_env();
     let slack = SlackClient::from_env();
+    let amaraki = AmarakiClient::from_env();
     let weather = OpenMeteoClient::new();
     let ical = IcalClient::new();
     let k8s = K8sClient::new();
@@ -55,7 +57,7 @@ pub async fn refresh_org_now(controller: Arc<IrisController>) {
     let ecoledirecte = EcoleDirecteClient::from_env();
 
     tokio::join!(
-        refresh_fast_once(&controller, &ha, &kusanagi, &slack),
+        refresh_fast_once(&controller, &ha, &kusanagi, &slack, &amaraki),
         refresh_slow_once(
             &controller,
             &weather,
@@ -73,6 +75,7 @@ async fn refresh_fast_once(
     ha: &HomeAssistantClient,
     kusanagi: &KusanagiClient,
     slack: &SlackClient,
+    amaraki: &AmarakiClient,
 ) {
     let ha_fut = async {
         if !ha.is_configured() {
@@ -107,12 +110,25 @@ async fn refresh_fast_once(
             }
         }
     };
+    let amaraki_fut = async {
+        match amaraki.fetch_reports().await {
+            Ok(reports) => Some(reports),
+            Err(err) => {
+                debug!(%err, "Amaraki agent reports unavailable");
+                None
+            }
+        }
+    };
 
-    let (ha_data, kus_data, slack_msgs) = tokio::join!(ha_fut, kus_fut, slack_fut);
+    let (ha_data, kus_data, slack_msgs, amaraki_reports) =
+        tokio::join!(ha_fut, kus_fut, slack_fut, amaraki_fut);
     if ha_data.is_some() || kus_data.is_some() || slack_msgs.is_some() {
         controller
             .apply_fast_telemetry(ha_data, kus_data, slack_msgs)
             .await;
+    }
+    if let Some(reports) = amaraki_reports {
+        controller.merge_agent_reports(reports).await;
     }
 }
 

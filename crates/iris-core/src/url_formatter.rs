@@ -35,7 +35,8 @@ impl DashboardUrlFormatter {
             | ScreenType::OrgStreamDeck
             | ScreenType::OrgLifeInfra
             | ScreenType::OrgHome
-            | ScreenType::OrgNews => String::new(),
+            | ScreenType::OrgNews
+            | ScreenType::OrgAgents => String::new(),
         }
     }
 }

@@ -14,6 +14,7 @@ pub enum ScreenType {
     OrgLifeInfra,
     OrgHome,
     OrgNews,
+    OrgAgents,
 }
 
 impl ScreenType {
@@ -34,6 +35,7 @@ impl ScreenType {
             Self::OrgLifeInfra => "Vie Quotidienne & Infra",
             Self::OrgHome => "Maison & Énergie",
             Self::OrgNews => "Actualités Kusanagi",
+            Self::OrgAgents => "Rapports Agents & Upgrades",
         }
     }
 }
@@ -718,6 +720,35 @@ pub enum MqttConnectionState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AgentUpgradeReport {
+    pub id: String,
+    pub agent_name: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub channel: String,
+    #[serde(default)]
+    pub prompt: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default = "default_true")]
+    pub is_real_success: bool,
+    #[serde(default)]
+    pub summary_note: String,
+    #[serde(default)]
+    pub report_output: String,
+    #[serde(default)]
+    pub started_at: String,
+    #[serde(default)]
+    pub completed_at: Option<String>,
+    #[serde(default)]
+    pub duration_secs: Option<u64>,
+    #[serde(default)]
+    pub updated_at_epoch_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct IrisPersistedState {
     pub screens: Vec<DisplayScreen>,
     pub notes: Vec<OrgNote>,
@@ -733,6 +764,8 @@ pub struct IrisPersistedState {
     pub shopping_list: Vec<ShoppingItem>,
     #[serde(default)]
     pub drive_orders: Vec<DriveOrder>,
+    #[serde(default)]
+    pub agent_reports: Vec<AgentUpgradeReport>,
     pub settings: IrisSettings,
     pub active_screen_id: Option<String>,
 }
@@ -754,6 +787,8 @@ pub struct IrisSnapshot {
     pub infra: InfraStatus,
     #[serde(default)]
     pub home_assistant: Option<HomeAssistantData>,
+    #[serde(default)]
+    pub agent_reports: Vec<AgentUpgradeReport>,
     pub deck_buttons: Vec<DeckButton>,
     pub pc_telemetry: Option<PcTelemetry>,
     pub last_deck_action: Option<DeckActionEvent>,

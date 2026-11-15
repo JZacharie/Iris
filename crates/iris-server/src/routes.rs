@@ -9,10 +9,10 @@ use axum::{Json, Router};
 use chrono::Utc;
 use iris_application::IrisController;
 use iris_core::{
-    ActiveAlert, AlertSeverity, CommsStatus, DeckButton, DisplayScreen, DriveOrder, IrisSettings,
-    IrisSnapshot, OrgEvent, OrgMail, PcTelemetry, ShoppingItem,
+    ActiveAlert, AgentUpgradeReport, AlertSeverity, CommsStatus, DeckButton, DisplayScreen,
+    DriveOrder, IrisSettings, IrisSnapshot, OrgEvent, OrgMail, PcTelemetry, ShoppingItem,
 };
-use iris_infrastructure::RumqttcAdapter;
+use iris_infrastructure::{AmarakiClient, RumqttcAdapter};
 use prometheus::{Encoder, TextEncoder};
 use serde::Deserialize;
 use serde_json::Value;
@@ -55,6 +55,11 @@ pub fn api_router(state: AppState) -> Router {
         .route("/api/home/cleardrive/{id}", delete(delete_drive_order))
         .route("/api/pc/telemetry", post(update_pc_telemetry))
         .route("/api/infra/proxmox/update", post(update_proxmox_vms))
+        .route(
+            "/api/agents/reports",
+            get(get_agent_reports).post(post_agent_report),
+        )
+        .route("/api/agents/trigger", post(trigger_amaraki_agent))
         .route("/api/deck/trigger", post(trigger_deck_button))
         .route("/api/deck/buttons", post(upsert_deck_button))
         .route("/api/deck/buttons/{id}", delete(delete_deck_button))
@@ -449,6 +454,87 @@ async fn update_proxmox_vms(State(state): State<AppState>) -> impl IntoResponse 
             })),
         )
             .into_response(),
+        Err(err) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn get_agent_reports(State(state): State<AppState>) -> Json<Vec<AgentUpgradeReport>> {
+    Json(state.controller.snapshot().await.agent_reports)
+}
+
+async fn post_agent_report(
+    State(state): State<AppState>,
+    Json(mut report): Json<AgentUpgradeReport>,
+) -> Json<IrisSnapshot> {
+    if report.updated_at_epoch_ms == 0 {
+        report.updated_at_epoch_ms = Utc::now().timestamp_millis();
+    }
+    Json(state.controller.upsert_agent_report(report).await)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriggerAmarakiReq {
+    #[serde(alias = "agent_name")]
+    agent_name: String,
+    prompt: String,
+    #[serde(default)]
+    channel: Option<String>,
+}
+
+async fn trigger_amaraki_agent(
+    State(state): State<AppState>,
+    Json(req): Json<TriggerAmarakiReq>,
+) -> impl IntoResponse {
+    let agent_name = req.agent_name.trim();
+    let prompt = req.prompt.trim();
+    if agent_name.is_empty() || prompt.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "agentName et prompt sont requis"
+            })),
+        )
+            .into_response();
+    }
+
+    let client = AmarakiClient::from_env();
+    match client
+        .trigger_agent(agent_name, prompt, req.channel.as_deref())
+        .await
+    {
+        Ok(job_id) => {
+            let now = Utc::now();
+            let report = AgentUpgradeReport {
+                id: job_id.clone(),
+                agent_name: agent_name.to_string(),
+                model: String::new(),
+                channel: req.channel.unwrap_or_else(|| "#ai".to_string()),
+                prompt: prompt.to_string(),
+                status: "running".to_string(),
+                is_real_success: true,
+                summary_note: "Mission déclenchée depuis Iris (en cours...)".to_string(),
+                report_output: String::new(),
+                started_at: now.to_rfc3339(),
+                completed_at: None,
+                duration_secs: None,
+                updated_at_epoch_ms: now.timestamp_millis(),
+            };
+            let snap = state.controller.upsert_agent_report(report).await;
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "status": "spawned",
+                    "jobId": job_id,
+                    "snapshot": snap
+                })),
+            )
+                .into_response()
+        }
         Err(err) => (
             StatusCode::BAD_GATEWAY,
             Json(serde_json::json!({ "error": err.to_string() })),

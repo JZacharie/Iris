@@ -1,4 +1,5 @@
 pub mod alexa_client;
+pub mod amaraki_client;
 pub mod ecoledirecte_client;
 pub mod github_client;
 pub mod homeassistant_client;
@@ -11,6 +12,7 @@ pub mod slack_client;
 pub mod weather_client;
 
 pub use alexa_client::AlexaMcpClient;
+pub use amaraki_client::AmarakiClient;
 pub use ecoledirecte_client::EcoleDirecteClient;
 pub use github_client::GitHubClient;
 pub use homeassistant_client::HomeAssistantClient;
