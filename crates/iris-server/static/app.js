@@ -27,41 +27,106 @@ function render(snap) {
   renderStage(snap);
 }
 
+const SCREEN_ICONS = {
+  ORG_OVERVIEW: "🏠",
+  ORG_HOME: "⚡",
+  ORG_LIFE_INFRA: "☸️",
+  ORG_NEWS: "📰",
+  ORG_AGENDA: "📅",
+  ORG_NOTES: "📌",
+  ORG_CLOCK: "🕒",
+  OPENOBSERVE: "🔭",
+  GRAFANA: "📊",
+  ORG_STREAM_DECK: "🎛️",
+  WEB: "🌐"
+};
+
+function screenBadge(s, snap) {
+  if (s.type === "ORG_LIFE_INFRA") {
+    const unread = (snap.comms?.slackUnread || 0) + (snap.comms?.missedCalls || 0) + (snap.comms?.voicemails || 0);
+    return unread > 0 ? String(unread) : "";
+  }
+  if (s.type === "ORG_NEWS") {
+    const cnt = (snap.infra?.kusanagi?.news || []).length;
+    return cnt > 0 ? String(cnt) : "";
+  }
+  if (s.type === "ORG_NOTES") {
+    const todo = (snap.notes || []).filter((n) => !n.done).length;
+    return todo > 0 ? String(todo) : "";
+  }
+  return "";
+}
+
 function renderHud(snap) {
   const pills = document.getElementById("screen-pills");
-  pills.innerHTML = `<span class="brand">IRIS</span>`;
+  pills.innerHTML = "";
   const displayedId = snap.displayedScreen?.id;
-  snap.screens.filter((s) => s.enabled).forEach((s) => {
-    const b = document.createElement("button");
-    b.className = "pill" + (s.id === displayedId && !snap.transientScreen ? " active" : "");
-    b.textContent = s.name;
-    b.onclick = () => api("/api/screen/select", "POST", { target: s.id });
-    pills.appendChild(b);
+  const enabledScreens = snap.screens.filter((s) => s.enabled);
+
+  const orgTypes = new Set(["ORG_OVERVIEW", "ORG_HOME", "ORG_LIFE_INFRA", "ORG_NEWS", "ORG_AGENDA", "ORG_NOTES", "ORG_CLOCK"]);
+  const groups = [
+    { title: "Quotidien & Maison", items: enabledScreens.filter((s) => orgTypes.has(s.type)) },
+    { title: "Observabilité & Poste", items: enabledScreens.filter((s) => !orgTypes.has(s.type)) }
+  ];
+
+  groups.forEach((grp) => {
+    if (!grp.items.length) return;
+    const sec = document.createElement("div");
+    sec.className = "nav-section";
+    sec.innerHTML = `<div class="nav-section-title">${escapeHtml(grp.title)}</div>`;
+    grp.items.forEach((s) => {
+      const b = document.createElement("button");
+      const isActive = s.id === displayedId && !snap.transientScreen;
+      b.className = "nav-item" + (isActive ? " active" : "");
+      b.title = s.name;
+      const icon = SCREEN_ICONS[s.type] || "🖥️";
+      const badge = screenBadge(s, snap);
+      b.innerHTML = `
+        <span class="nav-icon">${icon}</span>
+        <span class="nav-text">${escapeHtml(s.name)}</span>
+        ${badge ? `<span class="nav-badge">${escapeHtml(badge)}</span>` : ""}
+      `;
+      b.onclick = () => api("/api/screen/select", "POST", { target: s.id });
+      sec.appendChild(b);
+    });
+    pills.appendChild(sec);
   });
+
   if (snap.transientScreen) {
+    const sec = document.createElement("div");
+    sec.className = "nav-section";
+    sec.innerHTML = `<div class="nav-section-title">Écran Temporaire</div>`;
     const t = document.createElement("button");
-    t.className = "pill active";
-    t.textContent = snap.transientScreen.name;
-    pills.appendChild(t);
+    t.className = "nav-item active";
+    t.innerHTML = `<span class="nav-icon">⚡</span><span class="nav-text">${escapeHtml(snap.transientScreen.name)}</span>`;
+    sec.appendChild(t);
+    pills.appendChild(sec);
   }
 
   const dot = document.getElementById("mqtt-dot");
   dot.className = "dot " + snap.mqttState;
   document.getElementById("mqtt-label").textContent = `MQTT: ${snap.mqttState}`;
-  document.getElementById("btn-rotation").textContent = snap.settings.rotationEnabled ? "Pause" : "Lecture";
+  const rotLabel = document.getElementById("rotation-label");
+  const rotIcon = document.getElementById("rotation-icon");
+  if (rotLabel) {
+    rotLabel.textContent = snap.settings.rotationEnabled ? "Rotation : Active (Pause)" : "Rotation : En pause";
+  }
+  if (rotIcon) {
+    rotIcon.textContent = snap.settings.rotationEnabled ? "⏸️" : "▶️";
+  }
 
   const barthes = snap.barthesState || "DEGRE_ZERO";
   const barthesMeta = {
-    DEGRE_ZERO: { label: "Degré zéro", desc: "Équilibre silencieux — flux nominal" },
-    STUDIUM: { label: "Studium", desc: "Attention calme — veille organisationnelle" },
-    CONNOTATION: { label: "Connotation", desc: "Signal faible — tension ressources ou quota" },
-    PRESENCE: { label: "Présence", desc: "En communication — Teams / Zoom actif" },
-    PUNCTUM: { label: "Punctum", desc: "Rupture critique — incident actif" }
-  }[barthes] || { label: "Degré zéro", desc: "" };
+    DEGRE_ZERO: { icon: "🟢", label: "Degré zéro", desc: "Équilibre silencieux — flux nominal" },
+    STUDIUM: { icon: "🔵", label: "Studium", desc: "Attention calme — veille organisationnelle" },
+    CONNOTATION: { icon: "🟠", label: "Connotation", desc: "Signal faible — tension ressources ou quota" },
+    PRESENCE: { icon: "🟣", label: "Présence", desc: "En communication — Teams / Zoom actif" },
+    PUNCTUM: { icon: "🔴", label: "Punctum", desc: "Rupture critique — incident actif" }
+  }[barthes] || { icon: "🟢", label: "Degré zéro", desc: "" };
   const pill = document.getElementById("barthes-pill");
   if (pill) {
     pill.className = `barthes-pill barthes-${barthes}`;
-    pill.textContent = barthesMeta.label;
+    pill.innerHTML = `<span>${barthesMeta.icon}</span><span class="barthes-label-text">${escapeHtml(barthesMeta.label)}</span>`;
     pill.title = barthesMeta.desc;
   }
 }
@@ -1240,6 +1305,19 @@ document.getElementById("btn-show-hud").onclick = () => {
   document.getElementById("hud").classList.remove("hidden");
   document.getElementById("btn-show-hud").classList.remove("visible");
 };
+const collapseBtn = document.getElementById("btn-collapse-sidebar");
+if (collapseBtn) {
+  if (localStorage.getItem("iris_sidebar_collapsed") === "1") {
+    document.getElementById("hud").classList.add("collapsed");
+    collapseBtn.textContent = "▶";
+  }
+  collapseBtn.onclick = () => {
+    const hud = document.getElementById("hud");
+    const isCollapsed = hud.classList.toggle("collapsed");
+    collapseBtn.textContent = isCollapsed ? "▶" : "◀";
+    localStorage.setItem("iris_sidebar_collapsed", isCollapsed ? "1" : "0");
+  };
+}
 
 document.getElementById("btn-screens").onclick = () => {
   if (!currentSnapshot) return;

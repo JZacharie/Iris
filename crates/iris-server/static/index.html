@@ -22,23 +22,88 @@
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { height: 100%; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, sans-serif; overflow: hidden; }
-    .app { display: flex; flex-direction: column; height: 100vh; }
-    .hud {
-      display: flex; align-items: center; justify-content: space-between; gap: 12px;
-      padding: 8px 14px; background: rgba(17,24,39,0.96); border-bottom: 1px solid var(--border);
+    .app { display: flex; flex-direction: row; height: 100vh; width: 100vw; overflow: hidden; }
+    .sidebar {
+      width: 248px; min-width: 248px; height: 100vh;
+      background: linear-gradient(180deg, rgba(15,23,42,0.98) 0%, rgba(9,13,22,0.99) 100%);
+      border-right: 1px solid var(--border);
+      display: flex; flex-direction: column; z-index: 30;
+      transition: width 0.22s ease, min-width 0.22s ease;
+      user-select: none;
     }
-    .hud.hidden { display: none; }
-    .brand { font-weight: 800; color: var(--primary); letter-spacing: 0.08em; margin-right: 8px; }
-    .pills { display: flex; gap: 8px; overflow-x: auto; flex: 1; align-items: center; }
+    .sidebar.collapsed { width: 66px; min-width: 66px; }
+    .sidebar.hidden { display: none; }
+    .sidebar-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 14px 12px; border-bottom: 1px solid var(--border);
+    }
+    .brand-wrap { display: flex; align-items: center; gap: 10px; overflow: hidden; }
+    .brand-logo {
+      width: 32px; height: 32px; min-width: 32px; border-radius: 9px;
+      background: linear-gradient(135deg, rgba(56,189,248,0.25), rgba(168,85,247,0.25));
+      border: 1px solid var(--primary); display: flex; align-items: center; justify-content: center;
+      font-size: 16px; box-shadow: 0 0 12px rgba(56,189,248,0.25);
+    }
+    .brand { font-weight: 800; color: var(--primary); letter-spacing: 0.1em; font-size: 15px; line-height: 1.1; }
+    .brand-sub { font-size: 10px; color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; }
+    .sidebar-collapse-btn {
+      background: transparent; border: 1px solid var(--border); color: var(--muted);
+      width: 26px; height: 26px; border-radius: 7px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+      font-size: 11px;
+    }
+    .sidebar-collapse-btn:hover { border-color: var(--primary); color: var(--primary); }
+    .sidebar-nav {
+      flex: 1; overflow-y: auto; overflow-x: hidden; padding: 10px 8px;
+      display: flex; flex-direction: column; gap: 14px;
+    }
+    .nav-section { display: flex; flex-direction: column; gap: 3px; }
+    .nav-section-title {
+      font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.09em;
+      color: var(--muted); padding: 4px 10px 4px; white-space: nowrap; overflow: hidden;
+    }
+    .nav-item {
+      display: flex; align-items: center; gap: 10px; width: 100%;
+      padding: 8px 10px; border-radius: 9px; border: 1px solid transparent;
+      background: transparent; color: var(--text); cursor: pointer;
+      font-size: 13px; text-align: left; white-space: nowrap; overflow: hidden;
+      transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+    }
+    .nav-item:hover { background: rgba(30,41,59,0.75); border-color: var(--border); }
+    .nav-item.active {
+      background: rgba(56,189,248,0.16); border-color: rgba(56,189,248,0.45);
+      border-left: 3px solid var(--primary); color: var(--primary); font-weight: 600;
+    }
+    .nav-icon { font-size: 16px; min-width: 22px; text-align: center; line-height: 1; }
+    .nav-text { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+    .nav-badge {
+      font-size: 10px; padding: 1px 6px; border-radius: 999px;
+      background: rgba(56,189,248,0.18); color: var(--primary); font-weight: 700;
+    }
+    .sidebar-footer {
+      padding: 10px; border-top: 1px solid var(--border);
+      display: flex; flex-direction: column; gap: 8px; background: rgba(9,13,22,0.65);
+    }
+    .sidebar.collapsed .brand-text,
+    .sidebar.collapsed .nav-section-title,
+    .sidebar.collapsed .nav-text,
+    .sidebar.collapsed .nav-badge,
+    .sidebar.collapsed #mqtt-label,
+    .sidebar.collapsed .barthes-label-text { display: none; }
+    .sidebar.collapsed .sidebar-header { justify-content: center; padding: 12px 6px; }
+    .sidebar.collapsed .brand-wrap { display: none; }
+    .sidebar.collapsed .nav-item { justify-content: center; padding: 10px 6px; }
+    .sidebar.collapsed .mqtt-badge,
+    .sidebar.collapsed .barthes-pill { justify-content: center; padding: 6px; }
+    .main-area { flex: 1; display: flex; flex-direction: column; min-width: 0; height: 100vh; overflow: hidden; }
+    .pills { display: flex; gap: 8px; overflow-x: auto; align-items: center; }
     .pill {
       border: 1px solid var(--border); background: var(--surface2); color: var(--text);
       padding: 6px 12px; border-radius: 999px; cursor: pointer; white-space: nowrap; font-size: 13px;
     }
     .pill.active { background: rgba(56,189,248,0.2); border-color: var(--primary); color: var(--primary); font-weight: 600; }
-    .controls { display: flex; align-items: center; gap: 8px; }
     .mqtt-badge {
-      display: flex; align-items: center; gap: 6px; padding: 5px 10px;
-      border-radius: 999px; background: var(--surface2); font-size: 12px;
+      display: flex; align-items: center; gap: 6px; padding: 6px 10px;
+      border-radius: 10px; background: var(--surface2); font-size: 12px; border: 1px solid var(--border);
     }
     .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
     .dot.CONNECTED { background: var(--ok); }
@@ -78,7 +143,8 @@
     }
     .note-row.done span.txt { text-decoration: line-through; color: var(--muted); }
     .floating-hud-btn {
-      position: fixed; top: 12px; right: 12px; z-index: 40; display: none;
+      position: fixed; top: 12px; left: 12px; z-index: 40; display: none;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.45);
     }
     .floating-hud-btn.visible { display: block; }
     .modal-backdrop {
@@ -217,41 +283,77 @@
 </head>
 <body>
   <div class="app">
-    <header id="hud" class="hud">
-      <div class="pills" id="screen-pills">
-        <span class="brand">IRIS</span>
+    <aside id="hud" class="sidebar">
+      <div class="sidebar-header">
+        <div class="brand-wrap">
+          <div class="brand-logo">👁️</div>
+          <div class="brand-text">
+            <div class="brand">IRIS</div>
+            <div class="brand-sub">Cockpit • jo3</div>
+          </div>
+        </div>
+        <button id="btn-collapse-sidebar" class="sidebar-collapse-btn" title="Réduire / Agrandir le menu latéral">◀</button>
       </div>
-      <div class="controls">
-        <div id="barthes-pill" class="barthes-pill barthes-DEGRE_ZERO" title="État sémiotique Roland Barthes">Degré zéro</div>
-        <div class="mqtt-badge">
+
+      <nav class="sidebar-nav">
+        <div id="screen-pills"></div>
+
+        <div class="nav-section">
+          <div class="nav-section-title">Configuration & Pilotage</div>
+          <button class="nav-item" id="btn-screens" title="Gestion des écrans">
+            <span class="nav-icon">🖥️</span>
+            <span class="nav-text">Gestion des Écrans</span>
+          </button>
+          <button class="nav-item" id="btn-settings" title="Réglages Iris & MQTT">
+            <span class="nav-icon">⚙️</span>
+            <span class="nav-text">Réglages & Intégrations</span>
+          </button>
+          <button class="nav-item" id="btn-rotation" title="Activer / Mettre en pause la rotation automatique">
+            <span class="nav-icon" id="rotation-icon">⏸️</span>
+            <span class="nav-text" id="rotation-label">Rotation : Pause</span>
+          </button>
+          <button class="nav-item" id="btn-reload" title="Actualiser et recharger tous les flux">
+            <span class="nav-icon">↻</span>
+            <span class="nav-text">Actualiser les Flux</span>
+          </button>
+          <button class="nav-item" id="btn-hide-hud" title="Masquer la barre latérale (Mode Kiosk plein écran)">
+            <span class="nav-icon">⛶</span>
+            <span class="nav-text">Mode Kiosk Plein Écran</span>
+          </button>
+        </div>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div id="barthes-pill" class="barthes-pill barthes-DEGRE_ZERO" title="État sémiotique Roland Barthes">
+          <span>✨</span>
+          <span class="barthes-label-text" id="barthes-label">Degré zéro</span>
+        </div>
+        <div class="mqtt-badge" title="Statut du broker MQTT">
           <span id="mqtt-dot" class="dot"></span>
           <span id="mqtt-label">MQTT: …</span>
         </div>
-        <button class="btn" id="btn-rotation">Pause</button>
-        <button class="btn" id="btn-reload">↻</button>
-        <button class="btn" id="btn-screens">Écrans</button>
-        <button class="btn" id="btn-settings">Réglages</button>
-        <button class="btn" id="btn-hide-hud">▲</button>
       </div>
-    </header>
+    </aside>
 
-    <div id="alert-banner" class="alert-banner">
-      <div>
-        <span id="alert-severity" class="alert-tag">CRITIQUE</span>
-        <strong id="alert-title">Incident</strong>
-        <span id="alert-meta" style="color: var(--muted); font-size: 13px; margin-left: 8px;"></span>
-        <div id="alert-message" style="margin-top: 4px; font-size: 14px;"></div>
+    <div class="main-area">
+      <div id="alert-banner" class="alert-banner">
+        <div>
+          <span id="alert-severity" class="alert-tag">CRITIQUE</span>
+          <strong id="alert-title">Incident</strong>
+          <span id="alert-meta" style="color: var(--muted); font-size: 13px; margin-left: 8px;"></span>
+          <div id="alert-message" style="margin-top: 4px; font-size: 14px;"></div>
+        </div>
+        <div class="row">
+          <button class="btn" id="btn-alert-ack">Acquitter</button>
+          <button class="btn ok" id="btn-alert-clear">Résolu</button>
+        </div>
       </div>
-      <div class="row">
-        <button class="btn" id="btn-alert-ack">Acquitter</button>
-        <button class="btn ok" id="btn-alert-clear">Résolu</button>
-      </div>
+
+      <main id="stage" class="stage"></main>
     </div>
-
-    <main id="stage" class="stage"></main>
   </div>
 
-  <button id="btn-show-hud" class="btn floating-hud-btn">▼ HUD</button>
+  <button id="btn-show-hud" class="btn primary floating-hud-btn">☰ Menu Iris</button>
 
   <div id="modal-screens" class="modal-backdrop">
     <div class="modal">
