@@ -439,9 +439,9 @@ pub struct PcTelemetry {
 pub struct SlackMessageItem {
     pub id: String,
     pub channel: String,
-    pub author: String,
+    pub sender: String,
     pub text: String,
-    pub timestamp: String,
+    pub ts_label: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -670,13 +670,14 @@ pub struct KusanagiNewsItem {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KusanagiProxmoxVm {
-    pub vmid: u64,
+    pub vmid: u32,
     pub name: String,
     pub node: String,
-    pub server: String,
     pub kind: String,
     pub status: String,
     pub cpu_pct: u32,
+    pub mem_used_gb: String,
+    pub mem_total_gb: String,
     pub mem_pct: u32,
 }
 

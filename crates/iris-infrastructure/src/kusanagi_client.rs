@@ -157,16 +157,16 @@ impl KusanagiClient {
 
     pub async fn fetch_infra(&self) -> Result<KusanagiInfraData> {
         let (cluster_res, proxmox_res, vms_res, lxc_res, argo_res, alerts_res, news_res) = tokio::join!(
-            fetch_text(&self.http, &format!("{}/api/k8s/cluster", self.base_url)),
-            fetch_text(&self.http, &format!("{}/api/proxmox/nodes", self.base_url)),
-            fetch_text(&self.http, &format!("{}/api/proxmox/vms", self.base_url)),
+            fetch_text(&self.http, format!("{}/api/k8s/cluster", self.base_url)),
+            fetch_text(&self.http, format!("{}/api/proxmox/nodes", self.base_url)),
+            fetch_text(&self.http, format!("{}/api/proxmox/vms", self.base_url)),
             fetch_text(
                 &self.http,
-                &format!("{}/api/proxmox/containers", self.base_url)
+                format!("{}/api/proxmox/containers", self.base_url)
             ),
-            fetch_text(&self.http, &format!("{}/api/argocd/status", self.base_url)),
-            fetch_text(&self.http, &format!("{}/api/alerts", self.base_url)),
-            fetch_text(&self.http, &format!("{}/api/news", self.base_url)),
+            fetch_text(&self.http, format!("{}/api/argocd/status", self.base_url)),
+            fetch_text(&self.http, format!("{}/api/alerts", self.base_url)),
+            fetch_text(&self.http, format!("{}/api/news", self.base_url)),
         );
 
         let cluster = cluster_res.as_deref().ok().and_then(parse_cluster_json);
@@ -226,9 +226,9 @@ impl Default for KusanagiClient {
     }
 }
 
-async fn fetch_text(http: &reqwest::Client, url: &str) -> Result<String> {
+async fn fetch_text(http: &reqwest::Client, url: String) -> Result<String> {
     let resp = http
-        .get(url)
+        .get(&url)
         .send()
         .await
         .map_err(|e| IrisError::Persistence(format!("GET {url} failed: {e}")))?;
@@ -412,18 +412,17 @@ struct PveTicketResponse {
     data: Option<PveTicketData>,
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 struct PveNodeEntry {
     node: String,
 }
 
 #[derive(Deserialize)]
 struct PveListResponse<T> {
-    #[serde(default)]
     data: Vec<T>,
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 struct PveVmEntry {
     vmid: u32,
     #[serde(default)]
