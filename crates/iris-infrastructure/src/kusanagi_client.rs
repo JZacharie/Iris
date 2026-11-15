@@ -183,7 +183,7 @@ impl KusanagiClient {
         if let Ok(lxc_body) = lxc_res.as_deref() {
             proxmox_vms.extend(parse_proxmox_vms_json(lxc_body, "lxc"));
         }
-        proxmox_vms.sort_by(|a, b| a.vmid.cmp(&b.vmid));
+        proxmox_vms.sort_by_key(|a| a.vmid);
 
         let argocd = argo_res.as_deref().ok().and_then(parse_argocd_json);
         let alerts = alerts_res.as_deref().ok().and_then(parse_alerts_json);
