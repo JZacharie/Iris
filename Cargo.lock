@@ -548,7 +548,7 @@ dependencies = [
 
 [[package]]
 name = "iris-application"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -560,7 +560,7 @@ dependencies = [
 
 [[package]]
 name = "iris-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "serde",
@@ -571,22 +571,39 @@ dependencies = [
 
 [[package]]
 name = "iris-infrastructure"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "chrono",
  "iris-application",
  "iris-core",
+ "reqwest",
  "rumqttc",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "iris-pc-agent"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "iris-core",
+ "reqwest",
+ "serde_json",
+ "sysinfo",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
 name = "iris-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",

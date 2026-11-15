@@ -80,6 +80,18 @@ function renderAlert(alert) {
   document.getElementById("btn-alert-ack").style.display = alert.acknowledged ? "none" : "inline-block";
 }
 
+const GRAFANA_DASHBOARDS = [
+  { label: "☸️ K8S Cluster", url: "https://grafana.p.zacharie.org/d/b9b5adf3-6cdb-409d-86ae-0482e25fc165/k8s-dashboard" },
+  { label: "🖥️ Nodes Full", url: "https://grafana.p.zacharie.org/d/rYdddlPWk/node-exporter-full" },
+  { label: "🚀 ArgoCD", url: "https://grafana.p.zacharie.org/d/qPkgGHg7k/argocd" },
+  { label: "🚨 Alertmanager", url: "https://grafana.p.zacharie.org/d/eea-9_sik/alertmanager" },
+  { label: "🐝 Cilium", url: "https://grafana.p.zacharie.org/d/cilium-metrics/cilium-metrics" },
+  { label: "🐘 CloudNativePG", url: "https://grafana.p.zacharie.org/d/cloudnative-pg/cloudnativepg" },
+  { label: "🔀 Traefik", url: "https://grafana.p.zacharie.org/d/n5bu_kv45/traefik-official-standalone-dashboard" },
+  { label: "🎮 NVIDIA GPU", url: "https://grafana.p.zacharie.org/d/Oxed_c6Wz2/nvidia-dcgm-exporter-dashboard" },
+  { label: "🛡️ Trivy Security", url: "https://grafana.p.zacharie.org/d/trivy-security-overview/trivy-security-dashboard" }
+];
+
 function renderStage(snap) {
   const screen = snap.displayedScreen;
   const stage = document.getElementById("stage");
@@ -89,7 +101,46 @@ function renderStage(snap) {
   }
 
   const key = `${screen.id}|${snap.formattedUrl}|${snap.reloadCounter}|${screen.type}`;
-  if (screen.type === "GRAFANA" || screen.type === "OPENOBSERVE" || screen.type === "WEB") {
+  if (screen.type === "GRAFANA") {
+    if (lastRenderedKey === key) return;
+    lastRenderedKey = key;
+    const rawUrl = (!screen.url || screen.url.endsWith("/d/") || screen.url.endsWith("/d"))
+      ? GRAFANA_DASHBOARDS[0].url
+      : screen.url;
+    const iframeUrl = (!snap.formattedUrl || snap.formattedUrl.includes("/d/?"))
+      ? `${GRAFANA_DASHBOARDS[0].url}?kiosk&theme=dark&refresh=30s`
+      : snap.formattedUrl;
+
+    stage.innerHTML = `
+      <div style="display:flex;flex-direction:column;width:100%;height:100%;">
+        <div class="grafana-bar">
+          <div class="row" style="gap:6px;flex-wrap:nowrap;">
+            ${GRAFANA_DASHBOARDS.map((d) => {
+              const active = rawUrl.includes(d.url.split("/d/")[1]?.split("/")[0] || d.url);
+              return `<button class="pill grafana-preset ${active ? "active" : ""}" data-url="${escapeHtml(d.url)}">${escapeHtml(d.label)}</button>`;
+            }).join("")}
+          </div>
+          <a class="btn" href="${escapeHtml(iframeUrl)}" target="_blank" rel="noopener" style="text-decoration:none;white-space:nowrap;font-size:12px;padding:5px 10px;">↗ Ouvrir Grafana</a>
+        </div>
+        <iframe class="dashboard-frame" style="flex:1;height:calc(100% - 44px);" src="${escapeHtml(iframeUrl)}" allow="fullscreen"></iframe>
+      </div>
+    `;
+
+    stage.querySelectorAll(".grafana-preset").forEach((btn) => {
+      btn.onclick = () => {
+        const newUrl = btn.dataset.url;
+        if (!newUrl) return;
+        lastRenderedKey = null;
+        api("/api/screens", "POST", {
+          ...screen,
+          url: newUrl
+        });
+      };
+    });
+    return;
+  }
+
+  if (screen.type === "OPENOBSERVE" || screen.type === "WEB") {
     if (lastRenderedKey === key) return;
     lastRenderedKey = key;
     if (!snap.formattedUrl) {
@@ -102,11 +153,236 @@ function renderStage(snap) {
 
   lastRenderedKey = null;
   if (screen.type === "ORG_OVERVIEW") renderOrgOverview(stage, snap);
+  else if (screen.type === "ORG_HOME") renderOrgHome(stage, snap);
   else if (screen.type === "ORG_LIFE_INFRA") renderLifeInfra(stage, snap);
+  else if (screen.type === "ORG_NEWS") renderOrgNews(stage, snap);
   else if (screen.type === "ORG_STREAM_DECK") renderStreamDeck(stage, snap);
   else if (screen.type === "ORG_AGENDA") renderOrgAgenda(stage, snap);
   else if (screen.type === "ORG_NOTES") renderOrgNotes(stage, snap);
   else if (screen.type === "ORG_CLOCK") renderOrgClock(stage);
+}
+
+let selectedNewsSource = "ALL";
+
+function formatShortNewsDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("fr-FR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+function renderOrgNews(stage, snap) {
+  const kusanagi = snap.infra?.kusanagi;
+  const items = kusanagi?.news || [];
+  const availableSources = Array.from(new Set(items.map((i) => i.source).filter(Boolean))).sort();
+  if (selectedNewsSource !== "ALL" && !availableSources.includes(selectedNewsSource)) {
+    selectedNewsSource = "ALL";
+  }
+  const filtered = selectedNewsSource === "ALL"
+    ? items
+    : items.filter((i) => i.source === selectedNewsSource);
+
+  stage.innerHTML = `
+    <div class="org-view">
+      <div class="row" style="justify-content:space-between;margin-bottom:14px;">
+        <div>
+          <h2>📰 Actualités Kusanagi</h2>
+          <div style="color:var(--muted);font-size:13px;">${items.length} articles récents • ${availableSources.length} sources actives</div>
+        </div>
+        <button class="btn primary" id="btn-refresh-news">↻ Actualiser</button>
+      </div>
+
+      <div class="news-filter-bar">
+        <button class="pill ${selectedNewsSource === "ALL" ? "active" : ""}" data-src="ALL">Toutes (${items.length})</button>
+        ${availableSources.map((src) => {
+          const cnt = items.filter((i) => i.source === src).length;
+          return `<button class="pill ${selectedNewsSource === src ? "active" : ""}" data-src="${escapeHtml(src)}">${escapeHtml(src)} (${cnt})</button>`;
+        }).join("")}
+      </div>
+
+      ${filtered.length ? `
+        <div class="news-grid">
+          ${filtered.map((n) => `
+            <article class="news-card">
+              <div>
+                <div class="row" style="justify-content:space-between;margin-bottom:8px;">
+                  <span class="badge">${escapeHtml(n.icon || "🗞️")} ${escapeHtml(n.source || "news")}</span>
+                  <span style="color:var(--muted);font-size:11px;">${escapeHtml(formatShortNewsDate(n.publishedAt))}</span>
+                </div>
+                <a class="news-title" href="${escapeHtml(n.url)}" target="_blank" rel="noopener">${escapeHtml(n.title)}</a>
+                ${n.description ? `<p class="news-desc" style="margin-top:8px;">${escapeHtml(n.description)}</p>` : ""}
+              </div>
+              ${n.tags?.length ? `
+                <div class="row" style="gap:6px;">
+                  ${n.tags.slice(0, 3).map((t) => `<span style="font-size:10px;padding:2px 7px;border-radius:999px;background:var(--bg);border:1px solid var(--border);color:var(--muted);">${escapeHtml(t)}</span>`).join("")}
+                </div>
+              ` : ""}
+            </article>
+          `).join("")}
+        </div>
+      ` : `
+        <div class="card">
+          <p style="color:var(--muted);">Aucune actualité disponible pour le moment (en attente de Kusanagi /api/news).</p>
+        </div>
+      `}
+    </div>
+  `;
+
+  document.getElementById("btn-refresh-news").onclick = () => api("/api/org/refresh", "POST");
+  document.querySelectorAll(".news-filter-bar .pill").forEach((btn) => {
+    btn.onclick = () => {
+      selectedNewsSource = btn.dataset.src || "ALL";
+      renderOrgNews(stage, snap);
+    };
+  });
+}
+
+function pctColor(pct) {
+  if (pct >= 85) return "var(--crit)";
+  if (pct >= 65) return "var(--warn)";
+  return "var(--ok)";
+}
+
+function formatUptime(secs) {
+  const d = Math.floor(secs / 86400);
+  const h = Math.floor((secs % 86400) / 3600);
+  return d > 0 ? `${d}j ${h}h` : `${h}h`;
+}
+
+function renderOrgHome(stage, snap) {
+  const ha = snap.homeAssistant;
+  if (!ha || !ha.connected) {
+    stage.innerHTML = `
+      <div class="org-view">
+        <div class="row" style="justify-content:space-between;margin-bottom:16px;">
+          <div>
+            <h2>🏠 Maison & Énergie (Home Assistant)</h2>
+            <div style="color:var(--muted);font-size:13px;">Connexion à vha.zacharie.org en attente (vérifiez IRIS_HOME_ASSISTANT_TOKEN)</div>
+          </div>
+          <button class="btn primary" id="btn-refresh-ha">↻ Actualiser</button>
+        </div>
+        <div class="card">
+          <p style="color:var(--muted);">Les capteurs Home Assistant (Volvo EX40, Solaire Enphase, Confort, NAS JoNAS, Prises, Volets) apparaîtront ici dès que le token est configuré.</p>
+        </div>
+      </div>
+    `;
+    const btn = document.getElementById("btn-refresh-ha");
+    if (btn) btn.onclick = () => api("/api/org/refresh", "POST");
+    return;
+  }
+
+  const people = ha.people || [];
+  const car = ha.vehicle;
+  const energy = ha.energy || {};
+  const plugs = energy.plugs || [];
+  const maxPlugW = Math.max(100, ...plugs.map((p) => p.powerW || 0));
+  const totalPlugW = plugs.reduce((acc, p) => acc + Math.max(0, p.powerW || 0), 0);
+  const climate = ha.climate || [];
+  const nas = ha.nas;
+  const dev = ha.devices || {};
+
+  const carBat = car?.batteryPct ?? 0;
+  const carBatColor = carBat <= 20 ? "var(--crit)" : carBat <= 45 ? "var(--warn)" : "var(--ok)";
+
+  stage.innerHTML = `
+    <div class="org-view">
+      <div class="row" style="justify-content:space-between;margin-bottom:14px;">
+        <div>
+          <h2>🏠 Maison & Énergie</h2>
+          <div class="presence-strip" style="margin-top:8px;">
+            ${people.map((p) => `
+              <span class="presence-pill ${p.isHome ? "home" : ""}">
+                <span>${p.isHome ? "🟢" : "⚪"}</span>
+                <span>${escapeHtml(p.name)}</span>
+              </span>
+            `).join("")}
+            <span class="presence-pill ${dev.alarmState === "armed_away" ? "home" : ""}">
+              🛡️ Alarme : ${escapeHtml(dev.alarmState || "—")}
+            </span>
+          </div>
+        </div>
+        <button class="btn primary" id="btn-refresh-ha">↻ Actualiser</button>
+      </div>
+
+      <div class="kpi-grid-4">
+        <div class="kpi-card">
+          <div class="kpi-label"><span>🚙 Volvo EX40</span><span>${escapeHtml(car?.lockState || "—")}</span></div>
+          <div class="kpi-value" style="color:${carBatColor}">${car?.batteryPct != null ? `${car.batteryPct}%` : "—"}</div>
+          <div class="bar-track"><div class="bar-fill" style="width:${carBat}%;background:${carBatColor};"></div></div>
+          <div class="kpi-sub">${car?.rangeKm != null ? `${car.rangeKm} km` : "—"} • ${escapeHtml(car?.chargingStatus || "—")} • ${escapeHtml(car?.location || "—")}</div>
+        </div>
+
+        <div class="kpi-card">
+          <div class="kpi-label"><span>☀️ Solaire Enphase</span><span>Prod. jour</span></div>
+          <div class="kpi-value" style="color:var(--warn)">${energy.solarNowW != null ? `${energy.solarNowW} W` : "—"}</div>
+          <div class="kpi-sub">Aujourd'hui : <strong>${escapeHtml(energy.solarTodayKwh || "—")} kWh</strong></div>
+          <div class="kpi-sub">Prév. Auj: ${escapeHtml(energy.forecastTodayKwh || "—")} • Dem: ${escapeHtml(energy.forecastTomorrowKwh || "—")} kWh</div>
+        </div>
+
+        <div class="kpi-card">
+          <div class="kpi-label"><span>🌡️ Confort & Piscine</span><span>${climate.length} zones</span></div>
+          <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-top:4px;">
+            ${climate.slice(0, 4).map((c) => `
+              <div style="background:var(--bg);padding:6px 8px;border-radius:8px;border:1px solid var(--border);">
+                <div style="font-size:10px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(c.name)}</div>
+                <div style="font-size:16px;font-weight:800;">${escapeHtml(c.tempC)}°C ${c.humidityPct != null ? `<span style="font-size:11px;color:var(--muted);font-weight:400;">${c.humidityPct}%</span>` : ""}</div>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+
+        <div class="kpi-card">
+          <div class="kpi-label"><span>💾 NAS JoNAS</span><span>${escapeHtml(nas?.status || "—")}</span></div>
+          ${nas ? `
+            <div class="kpi-value" style="color:${pctColor(nas.cpuPct || 0)}">CPU ${nas.cpuPct ?? "—"}%</div>
+            <div class="kpi-sub">RAM : <strong>${nas.ramPct ?? "—"}%</strong> • Vol 1 : <strong>${escapeHtml(nas.volumeUsedPct)}%</strong></div>
+            <div class="kpi-sub">Disques : ${nas.diskTempsC?.length ? nas.diskTempsC.map((t) => `${t}°C`).join(" / ") : "—"}</div>
+          ` : `<div class="kpi-sub">Indisponible</div>`}
+        </div>
+      </div>
+
+      <div class="grid-2" style="height:auto;">
+        <div class="col">
+          <div class="card">
+            <div class="row" style="justify-content:space-between;margin-bottom:10px;">
+              <h3>⚡ Prises & Serveurs (${totalPlugW} W total)</h3>
+              <span class="badge">${plugs.length} capteurs</span>
+            </div>
+            ${plugs.length ? plugs.map((p) => {
+              const pct = Math.min(100, Math.round((Math.max(0, p.powerW) / maxPlugW) * 100));
+              return `
+                <div class="plug-row">
+                  <div style="width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(p.name)}</div>
+                  <div class="bar-track" style="flex:1;margin-top:0;"><div class="bar-fill" style="width:${pct}%;background:var(--primary);"></div></div>
+                  <div style="width:64px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums;">${p.powerW} W</div>
+                </div>
+              `;
+            }).join("") : "<span style='color:var(--muted)'>Aucune prise active détectée.</span>"}
+          </div>
+        </div>
+
+        <div class="col">
+          <div class="card">
+            <h3>🏡 Volets, Robot & Équipements</h3>
+            <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:12px;">
+              <div class="metric-card">
+                <div style="color:var(--muted);font-size:12px;">🪟 Volets ouverts</div>
+                <div style="font-size:24px;font-weight:800;color:${(dev.coversOpen || 0) > 0 ? "var(--primary)" : "var(--muted)"}">${dev.coversOpen || 0} / ${dev.coversTotal || 0}</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:4px;">${dev.openCoverNames?.length ? dev.openCoverNames.map(escapeHtml).join(", ") : "Tous fermés"}</div>
+              </div>
+              <div class="metric-card">
+                <div style="color:var(--muted);font-size:12px;">🤖 Aspirateur Rocky</div>
+                <div style="font-size:22px;font-weight:800;">${escapeHtml(dev.vacuumState || "—")}</div>
+                <div style="font-size:12px;color:var(--muted);margin-top:4px;">Batterie : ${dev.vacuumBatteryPct != null ? `${dev.vacuumBatteryPct}%` : "—"}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.getElementById("btn-refresh-ha").onclick = () => api("/api/org/refresh", "POST");
 }
 
 function renderStreamDeck(stage, snap) {
@@ -116,50 +392,92 @@ function renderStreamDeck(stage, snap) {
   const ramPct = pc ? pc.ramPercent : 0;
   const ramUsedGb = pc ? (pc.ramUsedMb / 1024).toFixed(1) : "0.0";
   const ramTotalGb = pc ? (pc.ramTotalMb / 1024).toFixed(1) : "0.0";
+  const gpuPct = pc ? (pc.gpuPercent || 0) : 0;
+  const gpuName = pc?.gpuName || "GPU NVIDIA";
+  const gpuMemPct = pc ? (pc.gpuMemPercent || 0) : 0;
+  const gpuMemUsedGb = pc ? ((pc.gpuMemUsedMb || 0) / 1024).toFixed(1) : "0.0";
+  const gpuMemTotalGb = pc ? ((pc.gpuMemTotalMb || 0) / 1024).toFixed(1) : "0.0";
   const limit = pc?.antigravityTokensLimit || 2000000;
   const used = pc?.antigravityTokensUsed || 0;
   const remaining = Math.max(0, limit - used);
   const quotaPct = Math.min(100, Math.round((remaining * 100) / limit));
+  const agentOnline = pc && pc.updatedAtEpochMs && (Date.now() - pc.updatedAtEpochMs < 30000);
 
   stage.innerHTML = `
     <div class="org-view">
       <div class="row" style="justify-content:space-between;margin-bottom:16px;">
         <div>
-          <h2>Stream Deck & Télémétrie PC</h2>
-          <div style="color:var(--muted);font-size:13px;">${pc ? `Poste : ${escapeHtml(pc.hostname)} • Uptime ${Math.floor(pc.uptimeSecs / 3600)}h` : "En attente de iris-pc-agent sur votre PC…"}</div>
+          <h2>🎛️ Stream Deck & Télémétrie PC Temps Réel</h2>
+          <div style="color:var(--muted);font-size:13px;">
+            ${pc
+              ? `<span style="color:${agentOnline ? "var(--ok)" : "var(--warn)"};font-weight:700;">● ${agentOnline ? "Agent PC Connecté" : "Agent PC en veille"}</span> • Poste : <strong>${escapeHtml(pc.hostname)}</strong> • Uptime ${Math.floor(pc.uptimeSecs / 3600)}h`
+              : "⚠️ En attente de iris-pc-agent sur votre PC…"}
+          </div>
         </div>
         <button class="btn" id="btn-toggle-deck-add">+ Ajouter une touche</button>
       </div>
 
       <div class="deck-telemetry">
         <div class="metric-card">
-          <div style="color:var(--muted);font-size:12px;">CPU</div>
-          <div style="font-size:28px;font-weight:800;margin-top:4px;">${pc ? cpu + "%" : "—"}</div>
-          <div class="bar-track"><div class="bar-fill" style="width:${cpu}%;background:${cpu >= 85 ? "var(--crit)" : "var(--primary)"};"></div></div>
+          <div class="row" style="justify-content:space-between;">
+            <span style="color:var(--muted);font-size:12px;">⚡ CPU Processeur</span>
+            <span class="badge">${pc ? escapeHtml(pc.hostname) : "PC"}</span>
+          </div>
+          <div style="font-size:30px;font-weight:800;margin-top:4px;color:${pctColor(cpu)};">${pc ? cpu + "%" : "—"}</div>
+          <div style="font-size:12px;color:var(--muted);">Charge globale temps réel</div>
+          <div class="bar-track"><div class="bar-fill" style="width:${cpu}%;background:${pctColor(cpu)};"></div></div>
         </div>
+
         <div class="metric-card">
-          <div style="color:var(--muted);font-size:12px;">Mémoire RAM</div>
-          <div style="font-size:28px;font-weight:800;margin-top:4px;">${pc ? ramPct + "%" : "—"}</div>
-          <div style="font-size:12px;color:var(--muted);">${pc ? `${ramUsedGb} / ${ramTotalGb} Go` : "Hors ligne"}</div>
-          <div class="bar-track"><div class="bar-fill" style="width:${ramPct}%;background:${ramPct >= 85 ? "var(--crit)" : "var(--ok)"};"></div></div>
+          <div class="row" style="justify-content:space-between;">
+            <span style="color:var(--muted);font-size:12px;">🧠 Mémoire RAM Système</span>
+            <span style="font-size:12px;font-weight:700;color:var(--text);">${pc ? `${ramUsedGb} / ${ramTotalGb} Go` : "—"}</span>
+          </div>
+          <div style="font-size:30px;font-weight:800;margin-top:4px;color:${pctColor(ramPct)};">${pc ? ramPct + "%" : "—"}</div>
+          <div style="font-size:12px;color:var(--muted);">${pc ? `${pc.ramUsedMb} Mo utilisés sur ${pc.ramTotalMb} Mo` : "Hors ligne"}</div>
+          <div class="bar-track"><div class="bar-fill" style="width:${ramPct}%;background:${pctColor(ramPct)};"></div></div>
         </div>
+
         <div class="metric-card">
-          <div style="color:var(--muted);font-size:12px;">Quota Antigravity restant</div>
-          <div style="font-size:24px;font-weight:800;margin-top:4px;">${(remaining / 1000).toFixed(0)}k <span style="font-size:13px;color:var(--muted);">/ ${(limit / 1000).toFixed(0)}k</span></div>
+          <div class="row" style="justify-content:space-between;">
+            <span style="color:var(--muted);font-size:12px;">🎮 GPU Charge</span>
+            <span class="badge" style="background:rgba(34,197,94,0.16);color:#86efac;">${escapeHtml(gpuName)}</span>
+          </div>
+          <div style="font-size:30px;font-weight:800;margin-top:4px;color:${pctColor(gpuPct)};">${pc && pc.gpuMemTotalMb > 0 ? gpuPct + "%" : "—"}</div>
+          <div style="font-size:12px;color:var(--muted);">Utilisation cœur graphique</div>
+          <div class="bar-track"><div class="bar-fill" style="width:${gpuPct}%;background:${pctColor(gpuPct)};"></div></div>
+        </div>
+
+        <div class="metric-card">
+          <div class="row" style="justify-content:space-between;">
+            <span style="color:var(--muted);font-size:12px;">📼 Mémoire VRAM GPU</span>
+            <span style="font-size:12px;font-weight:700;color:var(--text);">${pc && pc.gpuMemTotalMb > 0 ? `${gpuMemUsedGb} / ${gpuMemTotalGb} Go` : "—"}</span>
+          </div>
+          <div style="font-size:30px;font-weight:800;margin-top:4px;color:${pctColor(gpuMemPct)};">${pc && pc.gpuMemTotalMb > 0 ? gpuMemPct + "%" : "—"}</div>
+          <div style="font-size:12px;color:var(--muted);">${pc && pc.gpuMemTotalMb > 0 ? `${pc.gpuMemUsedMb} Mo / ${pc.gpuMemTotalMb} Mo dédiés` : "En attente nvidia-smi"}</div>
+          <div class="bar-track"><div class="bar-fill" style="width:${gpuMemPct}%;background:${pctColor(gpuMemPct)};"></div></div>
+        </div>
+
+        <div class="metric-card">
+          <div style="color:var(--muted);font-size:12px;">🤖 Quota Antigravity restant</div>
+          <div style="font-size:26px;font-weight:800;margin-top:4px;">${(remaining / 1000).toFixed(0)}k <span style="font-size:13px;color:var(--muted);">/ ${(limit / 1000).toFixed(0)}k</span></div>
           <div style="font-size:12px;color:var(--primary);">${escapeHtml(pc?.antigravityModel || "Gemini 4 Hydrogen")}</div>
           <div class="bar-track"><div class="bar-fill" style="width:${quotaPct}%;background:var(--primary);"></div></div>
         </div>
+
         <div class="metric-card">
-          <div style="color:var(--muted);font-size:12px;">Communication</div>
-          <div style="font-size:22px;font-weight:800;margin-top:6px;">${pc?.activeMeeting ? "🟢 " + escapeHtml(pc.activeMeeting) : "⚪ Veille"}</div>
-          <div style="font-size:12px;color:var(--muted);margin-top:6px;">${snap.lastDeckAction ? "Dernière action : " + escapeHtml(snap.lastDeckAction.label) : "Prêt à exécuter"}</div>
+          <div style="color:var(--muted);font-size:12px;">📡 Interaction PC & Réunions</div>
+          <div style="font-size:20px;font-weight:800;margin-top:6px;">${pc?.activeMeeting ? "🟢 En réunion " + escapeHtml(pc.activeMeeting) : "⚪ Aucune réunion active"}</div>
+          <div style="font-size:12px;color:var(--primary);margin-top:6px;font-weight:600;" id="deck-last-action-label">
+            ${snap.lastDeckAction ? `⚡ Exécuté : ${escapeHtml(snap.lastDeckAction.label)}` : "Prêt à exécuter sur le PC"}
+          </div>
         </div>
       </div>
 
       <div id="deck-add-form" class="card" style="display:none;margin-bottom:16px;">
         <div class="row">
-          <input id="dk-label" placeholder="Nom (ex: Daily Teams)" style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:8px;" />
-          <input id="dk-icon" placeholder="Icône (📞)" style="width:90px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:8px;" />
+          <input id="dk-label" placeholder="Nom (ex: Update UniGetUI)" style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:8px;" />
+          <input id="dk-icon" placeholder="Icône (📦)" style="width:90px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:8px;" />
           <select id="dk-kind" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:8px;">
             <option value="JOIN_TEAMS">Rejoindre Teams</option>
             <option value="JOIN_ZOOM">Rejoindre Zoom</option>
@@ -167,6 +485,8 @@ function renderStreamDeck(stage, snap) {
             <option value="LAUNCH_APP">Lancer App</option>
             <option value="MEDIA_TOGGLE">Média Play/Pause</option>
             <option value="LOCK_SCREEN">Verrouiller PC</option>
+            <option value="UPDATE_UNI_GET">Update UniGetUI / Winget</option>
+            <option value="UPDATE_PROXMOX_VMS">Update VMs Proxmox</option>
             <option value="SWITCH_IRIS_SCREEN">Changer Écran Iris</option>
           </select>
           <input id="dk-payload" placeholder="URL / Commande / Screen ID" style="flex:2;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:8px;" />
@@ -212,10 +532,20 @@ function renderStreamDeck(stage, snap) {
       </div>
       <div>
         <div style="font-weight:700;font-size:15px;">${escapeHtml(btn.label)}</div>
-        <div style="font-size:12px;color:var(--muted);margin-top:2px;">${escapeHtml(btn.subtitle || "")}</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px;" class="deck-sub">${escapeHtml(btn.subtitle || "")}</div>
       </div>
     `;
-    el.onclick = () => api("/api/deck/trigger", "POST", { buttonId: btn.id });
+    el.onclick = async () => {
+      const sub = el.querySelector(".deck-sub");
+      const prevText = sub ? sub.textContent : "";
+      el.style.borderColor = "var(--ok)";
+      if (sub) sub.textContent = "⚡ Commande envoyée…";
+      await api("/api/deck/trigger", "POST", { buttonId: btn.id });
+      setTimeout(() => {
+        el.style.borderColor = "";
+        if (sub) sub.textContent = prevText;
+      }, 1500);
+    };
     grid.appendChild(el);
   });
 }
@@ -299,6 +629,11 @@ function renderOrgOverview(stage, snap) {
   const cluster = snap.infra?.cluster;
   const offlineCount = cluster?.offlineNodes?.length || 0;
   const openPrs = snap.infra?.openPrs || [];
+  const kusanagi = snap.infra?.kusanagi;
+  const ha = snap.homeAssistant;
+  const homeCount = (ha?.people || []).filter((p) => p.isHome).length;
+  const argo = kusanagi?.argocd;
+  const kAlerts = kusanagi?.alerts;
 
   stage.innerHTML = `
     <div class="org-view">
@@ -320,11 +655,16 @@ function renderOrgOverview(stage, snap) {
               <div>📞 Appels manqués : <strong style="color:${(comms.missedCalls || 0) > 0 ? "var(--crit)" : "inherit"}">${comms.missedCalls || 0}</strong></div>
               <div>📼 Répondeur : <strong style="color:${(comms.voicemails || 0) > 0 ? "var(--warn)" : "inherit"}">${comms.voicemails || 0}</strong></div>
               <div>💬 Teams non lus : <strong>${comms.teamsUnread || 0}</strong></div>
+              <div>💜 Slack en suspens : <strong style="color:${(comms.slackUnread || 0) > 0 ? "var(--primary)" : "inherit"}">${comms.slackUnread || (comms.slackMessages?.length || 0)}</strong></div>
               <div>✉️ Mails non lus : <strong>${comms.mailsUnread || 0}</strong></div>
               <div>🛒 Courses Alexa : <strong>${shopPending}</strong></div>
               <div>🚗 ClearDrive prêt : <strong style="color:${driveReady > 0 ? "var(--ok)" : "inherit"}">${driveReady}</strong></div>
               <div>☸️ Cluster jo3 : <strong style="color:${offlineCount > 0 ? "var(--crit)" : "var(--ok)"}">${cluster ? `${cluster.nodesReady}/${cluster.nodesTotal} Ready` : "—"}</strong></div>
               <div>🔀 PRs GitHub : <strong>${openPrs.length}</strong></div>
+              <div>🚙 Volvo EX40 : <strong>${ha?.vehicle?.batteryPct != null ? `${ha.vehicle.batteryPct}% (${ha.vehicle.rangeKm ?? "—"} km)` : "—"}</strong></div>
+              <div>🏡 Présence / Solaire : <strong>${ha?.connected ? `${homeCount} à la maison • ${ha.energy?.solarNowW ?? 0} W` : "—"}</strong></div>
+              <div>🚀 ArgoCD : <strong style="color:${(argo?.degraded || 0) > 0 ? "var(--crit)" : "var(--ok)"}">${argo ? `${argo.healthy}/${argo.total} Healthy` : "—"}</strong></div>
+              <div>🚨 Alertes K8s : <strong style="color:${(kAlerts?.criticalCount || 0) > 0 ? "var(--crit)" : "var(--ok)"}">${kAlerts ? `${kAlerts.criticalCount} crit / ${kAlerts.warningCount} warn` : "—"}</strong></div>
             </div>
           </div>
         </div>
@@ -363,6 +703,22 @@ function renderOrgOverview(stage, snap) {
               ${notes.length ? notes.map((n) => `<div style="margin-bottom:4px;">${n.pinned ? "📌 " : "• "}${escapeHtml(n.text)}</div>`).join("") : "<span style='color:var(--muted)'>Aucune tâche en attente.</span>"}
             </div>
           </div>
+          ${(kusanagi?.news?.length) ? `
+          <div class="card">
+            <div class="row" style="justify-content:space-between;align-items:center;">
+              <h3>📰 À la une (Kusanagi)</h3>
+              <button class="btn" id="btn-hub-open-news" style="padding:4px 10px;font-size:12px;">Tout voir →</button>
+            </div>
+            <div style="margin-top:8px;">
+              ${kusanagi.news.slice(0, 3).map((n) => `
+                <div style="margin-bottom:6px;font-size:13px;">
+                  <span class="badge" style="margin-right:6px;">${escapeHtml(n.icon || "🗞️")} ${escapeHtml(n.source)}</span>
+                  <a href="${escapeHtml(n.url)}" target="_blank" rel="noopener" style="color:var(--text);text-decoration:none;font-weight:600;">${escapeHtml(n.title)}</a>
+                </div>
+              `).join("")}
+            </div>
+          </div>
+          ` : ""}
         </div>
       </div>
     </div>
@@ -370,6 +726,10 @@ function renderOrgOverview(stage, snap) {
   const btnAgenda = document.getElementById("btn-hub-open-agenda");
   if (btnAgenda) {
     btnAgenda.onclick = () => api("/api/screen/select", "POST", { target: "org-agenda" });
+  }
+  const btnNews = document.getElementById("btn-hub-open-news");
+  if (btnNews) {
+    btnNews.onclick = () => api("/api/screen/select", "POST", { target: "org-news" });
   }
   const launchers = document.getElementById("hub-launchers");
   snap.screens.filter((s) => s.enabled).forEach((s) => {
@@ -390,16 +750,115 @@ function renderLifeInfra(stage, snap) {
   const cluster = snap.infra?.cluster;
   const offlineNodes = cluster?.offlineNodes || [];
   const openPrs = snap.infra?.openPrs || [];
+  const kusanagi = snap.infra?.kusanagi;
+  const kCluster = kusanagi?.cluster;
+  const proxmoxNodes = kusanagi?.proxmoxNodes || [];
+  const proxmoxVms = kusanagi?.proxmoxVms || [];
+  const slackMessages = comms.slackMessages || [];
+  const argo = kusanagi?.argocd;
+  const kAlerts = kusanagi?.alerts;
 
   stage.innerHTML = `
     <div class="org-view">
       <div class="row" style="justify-content:space-between;margin-bottom:16px;">
         <div>
-          <h2>Vie Quotidienne, Messagerie & Infra jo3</h2>
-          <div style="color:var(--muted);font-size:13px;">Téléphone, Teams, Mails, Alexa, ClearDrive, nœuds Kubernetes jo3 & PRs GitHub</div>
+          <h2>Vie Quotidienne, Kusanagi & Infra jo3</h2>
+          <div style="color:var(--muted);font-size:13px;">Capteurs Kusanagi (Kubernetes, Proxmox, ArgoCD, Alertes), Téléphone, Alexa & ClearDrive</div>
         </div>
-        <button class="btn primary" id="btn-refresh-infra">↻ Actualiser Infra & PRs</button>
+        <button class="btn primary" id="btn-refresh-infra">↻ Actualiser Infra & Capteurs</button>
       </div>
+
+      <div class="kpi-grid-4">
+        <div class="kpi-card">
+          <div class="kpi-label"><span>☸️ Cluster jo3</span><span>${kCluster ? `${kCluster.servicesTotal} svcs` : "—"}</span></div>
+          <div class="kpi-value" style="color:${offlineNodes.length > 0 ? "var(--crit)" : "var(--ok)"}">${kCluster ? `${kCluster.nodesReady}/${kCluster.nodesTotal}` : (cluster ? `${cluster.nodesReady}/${cluster.nodesTotal}` : "—")}</div>
+          <div class="kpi-sub">${kCluster ? `${kCluster.podsRunning} / ${kCluster.podsTotal} pods Running` : "Nœuds Ready"}</div>
+        </div>
+
+        <div class="kpi-card">
+          <div class="kpi-label"><span>🚀 ArgoCD GitOps</span><span>${argo ? `${argo.synced}/${argo.total} synced` : "—"}</span></div>
+          <div class="kpi-value" style="color:${(argo?.degraded || 0) > 0 ? "var(--crit)" : "var(--ok)"}">${argo ? `${argo.healthy}/${argo.total}` : "—"}</div>
+          <div class="kpi-sub">${argo ? `${argo.degraded} dégradée(s) • ${argo.outOfSync} out-of-sync` : "En attente Kusanagi"}</div>
+        </div>
+
+        <div class="kpi-card">
+          <div class="kpi-label"><span>🚨 Alertmanager</span><span>Cluster</span></div>
+          <div class="kpi-value" style="color:${(kAlerts?.criticalCount || 0) > 0 ? "var(--crit)" : (kAlerts?.warningCount || 0) > 0 ? "var(--warn)" : "var(--ok)"}">
+            ${kAlerts ? `${kAlerts.criticalCount} crit` : "—"}
+          </div>
+          <div class="kpi-sub">${kAlerts ? `${kAlerts.warningCount} warning(s) actives` : "En attente Kusanagi"}</div>
+        </div>
+
+        <div class="kpi-card">
+          <div class="kpi-label"><span>🔀 PRs GitHub</span><span>Dépôts suivis</span></div>
+          <div class="kpi-value" style="color:var(--primary)">${openPrs.length}</div>
+          <div class="kpi-sub">${openPrs.filter((p) => p.isDependencyUpdate).length} mise(s) à jour dépendance</div>
+        </div>
+      </div>
+
+      ${proxmoxNodes.length ? `
+        <div class="card" style="margin-bottom:16px;">
+          <div class="row" style="justify-content:space-between;margin-bottom:10px;">
+            <div class="row" style="gap:8px;">
+              <h3>🖥️ Hyperviseurs & VMs Proxmox (Kusanagi)</h3>
+              <span class="badge">${proxmoxNodes.length} nœuds • ${proxmoxVms.length} VMs/LXC</span>
+            </div>
+            <button class="btn" id="btn-proxmox-update" style="padding:5px 12px;font-size:12px;">🔄 Update APT Nodes & VMs</button>
+          </div>
+          <div class="proxmox-grid">
+            ${proxmoxNodes.map((n) => `
+              <div class="node-card">
+                <div class="row" style="justify-content:space-between;margin-bottom:6px;">
+                  <strong>${escapeHtml(n.node)}</strong>
+                  <span style="font-size:11px;color:${n.status === "online" ? "var(--ok)" : "var(--crit)"};font-weight:700;">● ${escapeHtml(n.status)} • up ${formatUptime(n.uptimeSecs)}</span>
+                </div>
+                <div class="mini-bar-row">
+                  <span style="width:42px;color:var(--muted);">CPU</span>
+                  <div class="bar-track"><div class="bar-fill" style="width:${n.cpuPct}%;background:${pctColor(n.cpuPct)};"></div></div>
+                  <span style="width:44px;text-align:right;font-weight:700;">${n.cpuPct}%</span>
+                </div>
+                <div class="mini-bar-row">
+                  <span style="width:42px;color:var(--muted);">RAM</span>
+                  <div class="bar-track"><div class="bar-fill" style="width:${n.memPct}%;background:${pctColor(n.memPct)};"></div></div>
+                  <span style="width:88px;text-align:right;">${escapeHtml(n.memUsedGb)}/${escapeHtml(n.memTotalGb)}G</span>
+                </div>
+                <div class="mini-bar-row">
+                  <span style="width:42px;color:var(--muted);">Disk</span>
+                  <div class="bar-track"><div class="bar-fill" style="width:${n.diskPct}%;background:${pctColor(n.diskPct)};"></div></div>
+                  <span style="width:88px;text-align:right;">${escapeHtml(n.diskUsedGb)}/${escapeHtml(n.diskTotalGb)}G</span>
+                </div>
+              </div>
+            `).join("")}
+          </div>
+          ${proxmoxVms.length ? `
+            <div style="margin-top:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px;">
+              ${proxmoxVms.map((v) => `
+                <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:8px 10px;font-size:12px;">
+                  <div class="row" style="justify-content:space-between;">
+                    <strong>#${v.vmid} ${escapeHtml(v.name)}</strong>
+                    <span style="color:${v.status === "running" ? "var(--ok)" : "var(--muted)"};font-weight:700;">● ${escapeHtml(v.status)}</span>
+                  </div>
+                  <div style="color:var(--muted);margin-top:4px;">${escapeHtml(v.node)} (${escapeHtml(v.kind)}) • CPU ${v.cpuPct}% • RAM ${escapeHtml(v.memUsedGb)}/${escapeHtml(v.memTotalGb)}G</div>
+                </div>
+              `).join("")}
+            </div>
+          ` : ""}
+        </div>
+      ` : ""}
+
+      ${kAlerts?.topAlerts?.length ? `
+        <div class="card" style="margin-bottom:16px;border-color:rgba(239,68,68,0.45);">
+          <h3 style="margin-bottom:8px;">🚨 Alertes actives Prometheus / Alertmanager</h3>
+          ${kAlerts.topAlerts.map((a) => `
+            <div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:13px;">
+              <span class="badge" style="background:${a.severity === "critical" ? "rgba(239,68,68,0.22)" : "rgba(245,158,11,0.22)"};color:${a.severity === "critical" ? "#fecaca" : "#fde68a"};">${escapeHtml(a.severity)}</span>
+              <strong style="margin-left:6px;">${escapeHtml(a.name)}</strong>
+              <span style="color:var(--muted);">(${escapeHtml(a.namespace)})</span>
+              ${a.summary ? `<span style="color:var(--muted);margin-left:6px;">— ${escapeHtml(a.summary)}</span>` : ""}
+            </div>
+          `).join("")}
+        </div>
+      ` : ""}
 
       <div class="grid-2">
         <div class="col">
@@ -418,8 +877,8 @@ function renderLifeInfra(stage, snap) {
                 <div style="font-size:26px;font-weight:800;color:${(comms.voicemails || 0) > 0 ? "var(--warn)" : "var(--ok)"}">${comms.voicemails || 0}</div>
               </div>
               <div class="metric-card">
-                <div style="color:var(--muted);font-size:12px;">Teams non lus</div>
-                <div style="font-size:26px;font-weight:800;">${comms.teamsUnread || 0}</div>
+                <div style="color:var(--muted);font-size:12px;">Teams / Slack</div>
+                <div style="font-size:24px;font-weight:800;">${comms.teamsUnread || 0} <span style="font-size:14px;color:var(--primary);">/ ${comms.slackUnread || slackMessages.length} Slack</span></div>
               </div>
               <div class="metric-card">
                 <div style="color:var(--muted);font-size:12px;">Mails non lus</div>
@@ -428,6 +887,25 @@ function renderLifeInfra(stage, snap) {
             </div>
             ${missedDetails.length ? `<div style="margin-top:10px;font-size:13px;"><strong>Appels manqués :</strong> ${missedDetails.map((d) => escapeHtml(d)).join(" • ")}</div>` : ""}
             ${voicemailDetails.length ? `<div style="margin-top:6px;font-size:13px;"><strong>Répondeur :</strong> ${voicemailDetails.map((d) => escapeHtml(d)).join(" • ")}</div>` : ""}
+            ${slackMessages.length ? `
+              <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;">
+                <div class="row" style="justify-content:space-between;margin-bottom:6px;">
+                  <strong style="font-size:13px;">💜 Messages Slack en suspens (${slackMessages.length})</strong>
+                  <span class="badge">${escapeHtml(slackMessages[0]?.channel || "#ai")}</span>
+                </div>
+                <div style="max-height:200px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;">
+                  ${slackMessages.map((m) => `
+                    <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-size:12px;">
+                      <div class="row" style="justify-content:space-between;">
+                        <strong style="color:var(--primary);">${escapeHtml(m.sender)}</strong>
+                        <span style="color:var(--muted);font-size:11px;">${escapeHtml(m.tsLabel)}</span>
+                      </div>
+                      <div style="margin-top:3px;line-height:1.35;word-break:break-word;">${escapeHtml(m.text.length > 180 ? m.text.slice(0, 180) + "…" : m.text)}</div>
+                    </div>
+                  `).join("")}
+                </div>
+              </div>
+            ` : ""}
           </div>
 
           <div class="card">
@@ -508,6 +986,16 @@ function renderLifeInfra(stage, snap) {
   `;
 
   document.getElementById("btn-refresh-infra").onclick = () => api("/api/org/refresh", "POST");
+  const btnPveUpdate = document.getElementById("btn-proxmox-update");
+  if (btnPveUpdate) {
+    btnPveUpdate.onclick = async () => {
+      btnPveUpdate.textContent = "⏳ Mise à jour Proxmox en cours…";
+      const res = await api("/api/infra/proxmox/update", "POST");
+      btnPveUpdate.textContent = res?.updatedTargets != null
+        ? `✓ ${res.updatedTargets} nœuds/VMs lancés`
+        : "✓ Lancé";
+    };
+  }
 
   document.getElementById("btn-ack-comms").onclick = () =>
     api("/api/comms/status", "POST", {
@@ -517,6 +1005,8 @@ function renderLifeInfra(stage, snap) {
       voicemailDetails: [],
       teamsUnread: 0,
       mailsUnread: 0,
+      slackUnread: 0,
+      slackMessages: [],
     });
 
   document.getElementById("btn-add-shop").onclick = () => {
@@ -556,14 +1046,24 @@ function renderOrgAgenda(stage, snap) {
   const events = snap.org?.events || [];
   const weekDays = getWeekDays();
   const icalUrl = snap.settings?.org?.icalUrl || "";
+  const ed = snap.org?.ecoledirecte;
   const todayIso = toLocalIsoDate(new Date());
+
+  const edBadge = ed
+    ? (ed.connected
+        ? `<span class="badge" style="background:rgba(168,85,247,0.2);color:#e9d5ff;">🎓 ÉcoleDirecte (${escapeHtml(ed.studentId)}) : ${ed.coursesCount} cours</span>`
+        : `<span class="badge" style="background:rgba(245,158,11,0.18);color:#fde68a;" title="${escapeHtml(ed.lastError || "")}">🎓 ÉcoleDirecte : ${ed.configured ? escapeHtml(ed.lastError || "Erreur") : "Non configuré"}</span>`)
+    : "";
 
   stage.innerHTML = `
     <div class="org-view">
       <div class="row" style="justify-content:space-between;margin-bottom:16px;">
         <div>
-          <h2>Planning de la semaine & Mails du jour</h2>
-          <div style="color:var(--muted);font-size:13px;">${icalUrl ? "Agenda iCal connecté • Synchro auto toutes les 10 min" : "Aucun agenda .ics configuré — ajoutez votre lien iCal ou créez des événements ci-dessous"}</div>
+          <h2>Planning de la semaine & ÉcoleDirecte</h2>
+          <div class="row" style="margin-top:4px;">
+            <span style="color:var(--muted);font-size:13px;">${icalUrl ? "Agenda iCal connecté • Synchro auto" : "Ajoutez un lien iCal ou configurez ÉcoleDirecte"}</span>
+            ${edBadge}
+          </div>
         </div>
         <div class="row">
           ${!icalUrl ? `<button class="btn" id="btn-agenda-open-settings">⚙️ Connecter iCal (.ics)</button>` : ""}
@@ -590,16 +1090,20 @@ function renderOrgAgenda(stage, snap) {
                   <span style="color:${d.isToday ? "var(--primary)" : "var(--text)"}">${d.weekday} ${d.dayNum}</span>
                   ${d.isToday ? `<span style="font-size:10px;background:var(--primary);color:#041e2b;padding:1px 6px;border-radius:999px;">Auj.</span>` : `<span style="color:var(--muted);font-weight:400;">${dayEvents.length || ""}</span>`}
                 </div>
-                ${dayEvents.length ? dayEvents.map((e) => `
-                  <div class="evt-chip">
+                ${dayEvents.length ? dayEvents.map((e) => {
+                  const isEd = e.source === "ecoledirecte";
+                  const isCancelled = e.title.startsWith("[ANNULÉ]");
+                  return `
+                  <div class="evt-chip ${isEd ? "ed" : ""} ${isCancelled ? "cancelled" : ""}">
                     <div style="display:flex;justify-content:space-between;gap:4px;align-items:center;">
-                      <strong style="color:var(--primary);">${escapeHtml(e.startTime || "Journée")}${e.endTime ? "-" + escapeHtml(e.endTime) : ""}</strong>
-                      ${e.source !== "ical" ? `<button class="btn danger evt-del-btn" data-id="${escapeHtml(e.id)}" style="padding:1px 5px;font-size:10px;">✕</button>` : ""}
+                      <strong style="color:${isEd ? "#c084fc" : "var(--primary)"};">${escapeHtml(e.startTime || "Journée")}${e.endTime ? "-" + escapeHtml(e.endTime) : ""}</strong>
+                      ${e.source !== "ical" && !isEd ? `<button class="btn danger evt-del-btn" data-id="${escapeHtml(e.id)}" style="padding:1px 5px;font-size:10px;">✕</button>` : ""}
                     </div>
-                    <div style="margin-top:2px;">${escapeHtml(e.title)}</div>
-                    ${e.location ? `<div style="color:var(--muted);font-size:11px;">${escapeHtml(e.location)}</div>` : ""}
+                    <div style="margin-top:2px;">${isEd ? "🎓 " : ""}${escapeHtml(e.title)}</div>
+                    ${e.location ? `<div style="color:var(--muted);font-size:11px;">📍 ${escapeHtml(e.location)}</div>` : ""}
                   </div>
-                `).join("") : `<div style="color:var(--muted);font-size:12px;margin:auto 0;text-align:center;opacity:0.7;">Libre</div>`}
+                `;
+                }).join("") : `<div style="color:var(--muted);font-size:12px;margin:auto 0;text-align:center;opacity:0.7;">Libre</div>`}
               </div>
             `;
           }).join("")}

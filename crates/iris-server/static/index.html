@@ -108,7 +108,12 @@
     .barthes-PRESENCE { background: rgba(168,85,247,0.2); border-color: rgba(168,85,247,0.55); color: #e9d5ff; }
     .barthes-PUNCTUM { background: rgba(239,68,68,0.24); border-color: var(--crit); color: #fecaca; animation: pulse 1.4s infinite; }
     @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.65; } }
-    .deck-telemetry { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 20px; }
+    .deck-telemetry { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 20px; }
+    .grafana-bar {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 6px 14px; background: var(--surface); border-bottom: 1px solid var(--border);
+      overflow-x: auto; min-height: 44px;
+    }
     .metric-card {
       background: linear-gradient(145deg, rgba(17,24,39,0.95), rgba(30,41,59,0.65));
       border: 1px solid var(--border); border-radius: 16px; padding: 16px;
@@ -154,6 +159,60 @@
     }
     .deck-icon { font-size: 32px; line-height: 1; }
     .deck-cat { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+    .kpi-grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 16px; }
+    .kpi-card {
+      background: linear-gradient(155deg, rgba(17,24,39,0.96), rgba(30,41,59,0.72));
+      border: 1px solid var(--border); border-radius: 16px; padding: 16px;
+      display: flex; flex-direction: column; justify-content: space-between; gap: 8px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.22);
+    }
+    .kpi-label { font-size: 12px; color: var(--muted); font-weight: 600; letter-spacing: 0.02em; display: flex; justify-content: space-between; align-items: center; }
+    .kpi-value { font-size: 28px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.1; }
+    .kpi-sub { font-size: 12px; color: var(--muted); }
+    .presence-strip { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .presence-pill {
+      display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px;
+      border-radius: 999px; font-size: 13px; font-weight: 600;
+      border: 1px solid var(--border); background: var(--surface2); color: var(--muted);
+    }
+    .presence-pill.home { background: rgba(34,197,94,0.14); border-color: rgba(34,197,94,0.45); color: #86efac; }
+    .proxmox-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .node-card {
+      background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px;
+    }
+    .mini-bar-row { display: flex; align-items: center; gap: 8px; font-size: 12px; margin-top: 6px; }
+    .mini-bar-row .bar-track { flex: 1; margin-top: 0; height: 6px; }
+    .plug-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+    .plug-row:last-child { border-bottom: none; }
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700;
+      background: rgba(56,189,248,0.16); color: var(--primary);
+    }
+    .evt-chip.ed { border-left-color: #a855f7; background: rgba(168,85,247,0.10); }
+    .evt-chip.cancelled { border-left-color: var(--crit); opacity: 0.65; }
+    .news-filter-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+    .news-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+    .news-card {
+      background: linear-gradient(155deg, rgba(17,24,39,0.96), rgba(30,41,59,0.68));
+      border: 1px solid var(--border); border-radius: 16px; padding: 16px;
+      display: flex; flex-direction: column; justify-content: space-between; gap: 10px;
+      transition: border-color 0.15s ease;
+    }
+    .news-card:hover { border-color: var(--primary); }
+    .news-title { color: var(--text); font-weight: 700; font-size: 15px; line-height: 1.35; text-decoration: none; }
+    .news-title:hover { color: var(--primary); }
+    .news-desc {
+      color: var(--muted); font-size: 13px; line-height: 1.45;
+      display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    @media (max-width: 1100px) {
+      .kpi-grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .proxmox-grid { grid-template-columns: 1fr; }
+      .news-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 720px) {
+      .news-grid { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
@@ -213,7 +272,9 @@
             <option value="GRAFANA">Grafana</option>
             <option value="WEB">Web / URL</option>
             <option value="ORG_OVERVIEW">Org — Hub</option>
+            <option value="ORG_HOME">Maison & Énergie</option>
             <option value="ORG_LIFE_INFRA">Vie Quotidienne & Infra</option>
+            <option value="ORG_NEWS">Actualités Kusanagi</option>
             <option value="ORG_STREAM_DECK">Stream Deck & PC</option>
             <option value="ORG_AGENDA">Org — Planning & Mails</option>
             <option value="ORG_NOTES">Org — Notes</option>

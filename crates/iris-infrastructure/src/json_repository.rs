@@ -115,6 +115,26 @@ impl JsonFileRepository {
                 kind: DeckActionKind::LockScreen,
                 payload: String::new(),
             },
+            DeckButton {
+                id: "deck-uniget".to_string(),
+                label: "Update UniGetUI".to_string(),
+                subtitle: "Winget & Packages PC".to_string(),
+                icon: "📦".to_string(),
+                color: "#10b981".to_string(),
+                category: "Maintenance".to_string(),
+                kind: DeckActionKind::UpdateUniGet,
+                payload: "winget upgrade --all --include-unknown --accept-package-agreements --accept-source-agreements".to_string(),
+            },
+            DeckButton {
+                id: "deck-proxmox-update".to_string(),
+                label: "Update VMs Proxmox".to_string(),
+                subtitle: "APT Nodes & VMs".to_string(),
+                icon: "🔄".to_string(),
+                color: "#f59e0b".to_string(),
+                category: "Maintenance".to_string(),
+                kind: DeckActionKind::UpdateProxmoxVms,
+                payload: "all".to_string(),
+            },
         ]
     }
 
@@ -131,9 +151,29 @@ impl JsonFileRepository {
                 is_alert_target: false,
             },
             DisplayScreen {
+                id: "org-home".to_string(),
+                name: "Maison & Énergie".to_string(),
+                screen_type: ScreenType::OrgHome,
+                url: String::new(),
+                kiosk_mode: true,
+                auto_refresh_seconds: 0,
+                enabled: true,
+                is_alert_target: false,
+            },
+            DisplayScreen {
                 id: "org-life-infra".to_string(),
                 name: "Vie & Infra".to_string(),
                 screen_type: ScreenType::OrgLifeInfra,
+                url: String::new(),
+                kiosk_mode: true,
+                auto_refresh_seconds: 0,
+                enabled: true,
+                is_alert_target: false,
+            },
+            DisplayScreen {
+                id: "org-news".to_string(),
+                name: "Actualités".to_string(),
+                screen_type: ScreenType::OrgNews,
                 url: String::new(),
                 kiosk_mode: true,
                 auto_refresh_seconds: 0,
@@ -154,9 +194,9 @@ impl JsonFileRepository {
                 id: "grafana-alerts".to_string(),
                 name: "Grafana Cluster".to_string(),
                 screen_type: ScreenType::Grafana,
-                url: "https://grafana.zacharie.org/d/".to_string(),
+                url: "https://grafana.p.zacharie.org/d/b9b5adf3-6cdb-409d-86ae-0482e25fc165/k8s-dashboard".to_string(),
                 kiosk_mode: true,
-                auto_refresh_seconds: 30,
+                auto_refresh_seconds: 60,
                 enabled: true,
                 is_alert_target: false,
             },
@@ -242,9 +282,61 @@ impl StateRepository for JsonFileRepository {
             Ok(mut state) => {
                 if state.screens.is_empty() {
                     state.screens = Self::default_screens();
+                } else if !state
+                    .screens
+                    .iter()
+                    .any(|s| s.screen_type == ScreenType::OrgHome)
+                {
+                    state.screens.insert(
+                        1.min(state.screens.len()),
+                        DisplayScreen {
+                            id: "org-home".to_string(),
+                            name: "Maison & Énergie".to_string(),
+                            screen_type: ScreenType::OrgHome,
+                            url: String::new(),
+                            kiosk_mode: true,
+                            auto_refresh_seconds: 0,
+                            enabled: true,
+                            is_alert_target: false,
+                        },
+                    );
+                }
+                if !state
+                    .screens
+                    .iter()
+                    .any(|s| s.screen_type == ScreenType::OrgNews)
+                {
+                    state.screens.insert(
+                        2.min(state.screens.len()),
+                        DisplayScreen {
+                            id: "org-news".to_string(),
+                            name: "Actualités".to_string(),
+                            screen_type: ScreenType::OrgNews,
+                            url: String::new(),
+                            kiosk_mode: true,
+                            auto_refresh_seconds: 0,
+                            enabled: true,
+                            is_alert_target: false,
+                        },
+                    );
+                }
+                for screen in &mut state.screens {
+                    if screen.screen_type == ScreenType::Grafana
+                        && (screen.url.trim().is_empty()
+                            || screen.url.trim().ends_with("/d/")
+                            || screen.url.trim().ends_with("/d"))
+                    {
+                        screen.url = "https://grafana.p.zacharie.org/d/b9b5adf3-6cdb-409d-86ae-0482e25fc165/k8s-dashboard".to_string();
+                    }
                 }
                 if state.deck_buttons.is_empty() {
                     state.deck_buttons = Self::default_deck_buttons();
+                } else {
+                    for default_btn in Self::default_deck_buttons() {
+                        if !state.deck_buttons.iter().any(|b| b.id == default_btn.id) {
+                            state.deck_buttons.push(default_btn);
+                        }
+                    }
                 }
                 Ok(state)
             }

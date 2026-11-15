@@ -24,7 +24,11 @@ async fn main() -> anyhow::Result<()> {
 
     info!(%server_url, "Iris PC Agent started");
 
-    let http = reqwest::Client::new();
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(6))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .unwrap_or_default();
     let mut sys = System::new_all();
     let mut last_action_id = String::new();
     let mut tick: u32 = 0;
@@ -39,6 +43,8 @@ async fn main() -> anyhow::Result<()> {
             let ram_total_mb = sys.total_memory() / (1024 * 1024);
             let ram_used_mb = sys.used_memory() / (1024 * 1024);
             let ram_percent = (ram_used_mb * 100).checked_div(ram_total_mb).unwrap_or(0) as u32;
+            let (gpu_name, gpu_percent, gpu_mem_used_mb, gpu_mem_total_mb, gpu_mem_percent) =
+                query_nvidia_gpu();
             let active_meeting = detect_active_meeting(&sys);
             let hostname = System::host_name().unwrap_or_else(|| "Windows-PC".to_string());
 
@@ -48,6 +54,11 @@ async fn main() -> anyhow::Result<()> {
                 ram_used_mb,
                 ram_total_mb,
                 ram_percent,
+                gpu_name,
+                gpu_percent,
+                gpu_mem_used_mb,
+                gpu_mem_total_mb,
+                gpu_mem_percent,
                 uptime_secs: System::uptime(),
                 active_meeting,
                 antigravity_tokens_used: read_antigravity_tokens_used(),
@@ -70,7 +81,7 @@ async fn main() -> anyhow::Result<()> {
             if let Ok(snap) = resp.json::<IrisSnapshot>().await {
                 if let Some(action) = snap.last_deck_action {
                     if !last_action_id.is_empty() && action.id != last_action_id {
-                        execute_deck_action(&action);
+                        execute_deck_action(&action, &http, &server_url).await;
                     }
                     last_action_id = action.id;
                 } else if last_action_id.is_empty() {
@@ -82,6 +93,42 @@ async fn main() -> anyhow::Result<()> {
         tick = tick.wrapping_add(1);
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
+}
+
+fn query_nvidia_gpu() -> (String, u32, u64, u64, u32) {
+    let mut cmd = Command::new("nvidia-smi");
+    cmd.args([
+        "--query-gpu=name,utilization.gpu,memory.used,memory.total",
+        "--format=csv,noheader,nounits",
+    ]);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let Ok(output) = cmd.output() else {
+        return (String::new(), 0, 0, 0, 0);
+    };
+    if !output.status.success() {
+        return (String::new(), 0, 0, 0, 0);
+    }
+    let line = String::from_utf8_lossy(&output.stdout);
+    let first_line = line.lines().next().unwrap_or("").trim();
+    if first_line.is_empty() {
+        return (String::new(), 0, 0, 0, 0);
+    }
+    let parts: Vec<&str> = first_line.split(',').map(str::trim).collect();
+    if parts.len() < 4 {
+        return (String::new(), 0, 0, 0, 0);
+    }
+    let name = parts[0].to_string();
+    let util = parts[1].parse::<u32>().unwrap_or(0);
+    let mem_used = parts[2].parse::<u64>().unwrap_or(0);
+    let mem_total = parts[3].parse::<u64>().unwrap_or(0);
+    let mem_pct = (mem_used * 100).checked_div(mem_total).unwrap_or(0) as u32;
+    (name, util, mem_used, mem_total, mem_pct)
 }
 
 fn detect_active_meeting(sys: &System) -> Option<String> {
@@ -104,7 +151,7 @@ fn read_antigravity_tokens_used() -> u64 {
         .unwrap_or(0)
 }
 
-fn execute_deck_action(action: &DeckActionEvent) {
+async fn execute_deck_action(action: &DeckActionEvent, http: &reqwest::Client, server_url: &str) {
     info!(label = %action.label, kind = ?action.kind, payload = %action.payload, "Executing Stream Deck action");
 
     match action.kind {
@@ -154,6 +201,28 @@ fn execute_deck_action(action: &DeckActionEvent) {
                     .args(["user32.dll,LockWorkStation"])
                     .spawn();
             }
+        }
+        DeckActionKind::UpdateUniGet => {
+            #[cfg(target_os = "windows")]
+            {
+                let _ = Command::new("cmd")
+                    .args([
+                        "/C",
+                        "start",
+                        "UniGetUI Upgrade",
+                        "powershell",
+                        "-NoProfile",
+                        "-Command",
+                        "winget upgrade --all --include-unknown --accept-package-agreements --accept-source-agreements",
+                    ])
+                    .spawn();
+            }
+        }
+        DeckActionKind::UpdateProxmoxVms => {
+            let _ = http
+                .post(format!("{server_url}/api/infra/proxmox/update"))
+                .send()
+                .await;
         }
         DeckActionKind::SwitchIrisScreen => {}
     }

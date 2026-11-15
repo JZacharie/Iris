@@ -54,6 +54,7 @@ pub fn api_router(state: AppState) -> Router {
         .route("/api/home/cleardrive", post(upsert_drive_order))
         .route("/api/home/cleardrive/{id}", delete(delete_drive_order))
         .route("/api/pc/telemetry", post(update_pc_telemetry))
+        .route("/api/infra/proxmox/update", post(update_proxmox_vms))
         .route("/api/deck/trigger", post(trigger_deck_button))
         .route("/api/deck/buttons", post(upsert_deck_button))
         .route("/api/deck/buttons/{id}", delete(delete_deck_button))
@@ -417,9 +418,39 @@ async fn trigger_deck_button(
     Json(req): Json<TriggerDeckReq>,
 ) -> impl IntoResponse {
     match state.controller.trigger_deck_button(&req.button_id).await {
-        Ok(snap) => (StatusCode::OK, Json(snap)).into_response(),
+        Ok(snap) => {
+            if snap
+                .last_deck_action
+                .as_ref()
+                .is_some_and(|a| a.kind == iris_core::DeckActionKind::UpdateProxmoxVms)
+            {
+                tokio::spawn(async {
+                    let _ = iris_infrastructure::kusanagi_client::trigger_proxmox_updates().await;
+                });
+            }
+            (StatusCode::OK, Json(snap)).into_response()
+        }
         Err(err) => (
             StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn update_proxmox_vms(State(state): State<AppState>) -> impl IntoResponse {
+    match iris_infrastructure::kusanagi_client::trigger_proxmox_updates().await {
+        Ok(count) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "status": "ok",
+                "updatedTargets": count,
+                "snapshot": state.controller.snapshot().await
+            })),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::BAD_GATEWAY,
             Json(serde_json::json!({ "error": err.to_string() })),
         )
             .into_response(),

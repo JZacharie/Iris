@@ -12,6 +12,8 @@ pub enum ScreenType {
     OrgAgenda,
     OrgStreamDeck,
     OrgLifeInfra,
+    OrgHome,
+    OrgNews,
 }
 
 impl ScreenType {
@@ -30,6 +32,8 @@ impl ScreenType {
             Self::OrgAgenda => "Organisation — Planning & Mails",
             Self::OrgStreamDeck => "Stream Deck & PC",
             Self::OrgLifeInfra => "Vie Quotidienne & Infra",
+            Self::OrgHome => "Maison & Énergie",
+            Self::OrgNews => "Actualités Kusanagi",
         }
     }
 }
@@ -297,10 +301,27 @@ pub struct OrgEvent {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct EcoleDirecteStatus {
+    pub configured: bool,
+    pub connected: bool,
+    #[serde(default)]
+    pub student_id: String,
+    #[serde(default)]
+    pub courses_count: u32,
+    #[serde(default)]
+    pub last_error: Option<String>,
+    #[serde(default)]
+    pub updated_at_epoch_ms: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OrgFeedData {
     pub weather: Option<WeatherForecast>,
     pub mails: Vec<OrgMail>,
     pub events: Vec<OrgEvent>,
+    #[serde(default)]
+    pub ecoledirecte: Option<EcoleDirecteStatus>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -350,6 +371,8 @@ pub enum DeckActionKind {
     MediaToggle,
     LockScreen,
     SwitchIrisScreen,
+    UpdateUniGet,
+    UpdateProxmoxVms,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -389,6 +412,16 @@ pub struct PcTelemetry {
     pub ram_used_mb: u64,
     pub ram_total_mb: u64,
     pub ram_percent: u32,
+    #[serde(default)]
+    pub gpu_name: String,
+    #[serde(default)]
+    pub gpu_percent: u32,
+    #[serde(default)]
+    pub gpu_mem_used_mb: u64,
+    #[serde(default)]
+    pub gpu_mem_total_mb: u64,
+    #[serde(default)]
+    pub gpu_mem_percent: u32,
     pub uptime_secs: u64,
     #[serde(default)]
     pub active_meeting: Option<String>,
@@ -399,6 +432,16 @@ pub struct PcTelemetry {
     #[serde(default)]
     pub antigravity_model: String,
     pub updated_at_epoch_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackMessageItem {
+    pub id: String,
+    pub channel: String,
+    pub author: String,
+    pub text: String,
+    pub timestamp: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -416,6 +459,10 @@ pub struct CommsStatus {
     pub teams_unread: u32,
     #[serde(default)]
     pub mails_unread: u32,
+    #[serde(default)]
+    pub slack_unread: u32,
+    #[serde(default)]
+    pub slack_messages: Vec<SlackMessageItem>,
     #[serde(default)]
     pub updated_at_epoch_ms: i64,
 }
@@ -466,11 +513,197 @@ pub struct GitHubPrSummary {
     pub is_dependency_update: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HaPerson {
+    pub id: String,
+    pub name: String,
+    pub state: String,
+    pub is_home: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HaVehicle {
+    pub name: String,
+    pub battery_pct: Option<u32>,
+    pub range_km: Option<u32>,
+    pub charging_status: String,
+    pub location: String,
+    pub lock_state: String,
+    pub odometer_km: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HaPowerPlug {
+    pub entity_id: String,
+    pub name: String,
+    pub power_w: i32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HaEnergy {
+    pub solar_now_w: Option<i32>,
+    pub solar_today_kwh: String,
+    pub forecast_today_kwh: String,
+    pub forecast_tomorrow_kwh: String,
+    pub plugs: Vec<HaPowerPlug>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HaClimateSensor {
+    pub name: String,
+    pub temp_c: String,
+    pub humidity_pct: Option<u32>,
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HaNasStatus {
+    pub name: String,
+    pub cpu_pct: Option<u32>,
+    pub ram_pct: Option<u32>,
+    pub volume_used_pct: String,
+    pub disk_temps_c: Vec<i32>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HaDeviceSummary {
+    pub alarm_state: String,
+    pub vacuum_state: String,
+    pub vacuum_battery_pct: Option<u32>,
+    pub covers_open: u32,
+    pub covers_total: u32,
+    pub open_cover_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HomeAssistantData {
+    pub connected: bool,
+    pub updated_at_epoch_ms: i64,
+    pub people: Vec<HaPerson>,
+    pub vehicle: Option<HaVehicle>,
+    pub energy: HaEnergy,
+    pub climate: Vec<HaClimateSensor>,
+    pub nas: Option<HaNasStatus>,
+    pub devices: HaDeviceSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KusanagiClusterMetrics {
+    pub nodes_ready: u32,
+    pub nodes_total: u32,
+    pub pods_running: u32,
+    pub pods_total: u32,
+    pub services_total: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KusanagiProxmoxNode {
+    pub node: String,
+    pub status: String,
+    pub cpu_pct: u32,
+    pub mem_used_gb: String,
+    pub mem_total_gb: String,
+    pub mem_pct: u32,
+    pub disk_used_gb: String,
+    pub disk_total_gb: String,
+    pub disk_pct: u32,
+    pub uptime_secs: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KusanagiArgoCdSummary {
+    pub total: u32,
+    pub healthy: u32,
+    pub synced: u32,
+    pub degraded: u32,
+    pub out_of_sync: u32,
+    pub issues: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KusanagiAlertItem {
+    pub name: String,
+    pub namespace: String,
+    pub severity: String,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KusanagiAlertsSummary {
+    pub critical_count: u32,
+    pub warning_count: u32,
+    pub top_alerts: Vec<KusanagiAlertItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KusanagiNewsItem {
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub icon: String,
+    #[serde(default)]
+    pub published_at: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KusanagiProxmoxVm {
+    pub vmid: u64,
+    pub name: String,
+    pub node: String,
+    pub server: String,
+    pub kind: String,
+    pub status: String,
+    pub cpu_pct: u32,
+    pub mem_pct: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KusanagiInfraData {
+    pub connected: bool,
+    pub updated_at_epoch_ms: i64,
+    pub cluster: Option<KusanagiClusterMetrics>,
+    pub proxmox_nodes: Vec<KusanagiProxmoxNode>,
+    #[serde(default)]
+    pub proxmox_vms: Vec<KusanagiProxmoxVm>,
+    pub argocd: Option<KusanagiArgoCdSummary>,
+    pub alerts: Option<KusanagiAlertsSummary>,
+    #[serde(default)]
+    pub news: Vec<KusanagiNewsItem>,
+    #[serde(default)]
+    pub news_sources: Vec<String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InfraStatus {
     pub cluster: Option<ClusterStatus>,
     pub open_prs: Vec<GitHubPrSummary>,
+    #[serde(default)]
+    pub kusanagi: Option<KusanagiInfraData>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -518,6 +751,8 @@ pub struct IrisSnapshot {
     pub shopping_list: Vec<ShoppingItem>,
     pub drive_orders: Vec<DriveOrder>,
     pub infra: InfraStatus,
+    #[serde(default)]
+    pub home_assistant: Option<HomeAssistantData>,
     pub deck_buttons: Vec<DeckButton>,
     pub pc_telemetry: Option<PcTelemetry>,
     pub last_deck_action: Option<DeckActionEvent>,

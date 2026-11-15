@@ -4,10 +4,10 @@ use std::time::Duration;
 use chrono::Utc;
 use iris_core::{
     ActiveAlert, BarthesState, ClusterStatus, CommsStatus, DashboardUrlFormatter, DeckActionEvent,
-    DeckActionKind, DeckButton, DisplayScreen, DriveOrder, GitHubPrSummary, InfraStatus,
-    IrisCommand, IrisPersistedState, IrisSettings, IrisSnapshot, MqttCommandParser,
-    MqttConnectionState, OrgEvent, OrgFeedData, OrgMail, OrgNote, PcTelemetry, Result, ScreenType,
-    ShoppingItem, WeatherForecast,
+    DeckActionKind, DeckButton, DisplayScreen, DriveOrder, EcoleDirecteStatus, GitHubPrSummary,
+    HomeAssistantData, InfraStatus, IrisCommand, IrisPersistedState, IrisSettings, IrisSnapshot,
+    KusanagiInfraData, MqttCommandParser, MqttConnectionState, OrgEvent, OrgFeedData, OrgMail,
+    OrgNote, PcTelemetry, Result, ScreenType, ShoppingItem, SlackMessageItem, WeatherForecast,
 };
 use tokio::sync::{broadcast, RwLock};
 use tracing::{info, warn};
@@ -29,6 +29,8 @@ struct InnerState {
     shopping_list: Vec<ShoppingItem>,
     drive_orders: Vec<DriveOrder>,
     infra: InfraStatus,
+    home_assistant: Option<HomeAssistantData>,
+    ecoledirecte: Option<EcoleDirecteStatus>,
     deck_buttons: Vec<DeckButton>,
     pc_telemetry: Option<PcTelemetry>,
     last_deck_action: Option<DeckActionEvent>,
@@ -67,6 +69,8 @@ impl InnerState {
             shopping_list: persisted.shopping_list,
             drive_orders: persisted.drive_orders,
             infra: InfraStatus::default(),
+            home_assistant: None,
+            ecoledirecte: None,
             deck_buttons: persisted.deck_buttons,
             pc_telemetry: None,
             last_deck_action: None,
@@ -85,7 +89,7 @@ impl InnerState {
             events: self
                 .events
                 .iter()
-                .filter(|e| e.source != "ical")
+                .filter(|e| e.source != "ical" && e.source != "ecoledirecte")
                 .cloned()
                 .collect(),
             deck_buttons: self.deck_buttons.clone(),
@@ -111,6 +115,7 @@ impl InnerState {
             self.active_alert.as_ref(),
             self.pc_telemetry.as_ref(),
             self.infra.cluster.as_ref(),
+            self.infra.kusanagi.as_ref(),
             displayed.as_ref(),
         );
 
@@ -132,11 +137,13 @@ impl InnerState {
                 weather: self.weather.clone(),
                 mails: self.mails.clone(),
                 events: self.events.clone(),
+                ecoledirecte: self.ecoledirecte.clone(),
             },
             comms,
             shopping_list: self.shopping_list.clone(),
             drive_orders: self.drive_orders.clone(),
             infra: self.infra.clone(),
+            home_assistant: self.home_assistant.clone(),
             deck_buttons: self.deck_buttons.clone(),
             pc_telemetry: self.pc_telemetry.clone(),
             last_deck_action: self.last_deck_action.clone(),
@@ -153,6 +160,7 @@ fn compute_barthes_state(
     alert: Option<&ActiveAlert>,
     pc: Option<&PcTelemetry>,
     cluster: Option<&ClusterStatus>,
+    kusanagi: Option<&KusanagiInfraData>,
     displayed: Option<&DisplayScreen>,
 ) -> BarthesState {
     if alert.is_some_and(|a| !a.acknowledged)
@@ -170,6 +178,13 @@ fn compute_barthes_state(
             return BarthesState::Connotation;
         }
     }
+    if let Some(k) = kusanagi {
+        let has_crit_alerts = k.alerts.as_ref().is_some_and(|a| a.critical_count > 0);
+        let has_degraded_apps = k.argocd.as_ref().is_some_and(|a| a.degraded > 0);
+        if has_crit_alerts || has_degraded_apps {
+            return BarthesState::Connotation;
+        }
+    }
     if displayed.is_some_and(|s| {
         matches!(
             s.screen_type,
@@ -178,6 +193,8 @@ fn compute_barthes_state(
                 | ScreenType::OrgNotes
                 | ScreenType::OrgStreamDeck
                 | ScreenType::OrgLifeInfra
+                | ScreenType::OrgHome
+                | ScreenType::OrgNews
         )
     }) {
         return BarthesState::Studium;
@@ -696,6 +713,135 @@ impl IrisController {
         snapshot
     }
 
+    pub async fn set_home_assistant(&self, data: HomeAssistantData) -> IrisSnapshot {
+        let snapshot = {
+            let mut state = self.inner.write().await;
+            state.home_assistant = Some(data);
+            state.snapshot()
+        };
+        self.broadcast_only(&snapshot).await;
+        snapshot
+    }
+
+    pub async fn set_kusanagi_infra(&self, data: KusanagiInfraData) -> IrisSnapshot {
+        let snapshot = {
+            let mut state = self.inner.write().await;
+            if state.infra.cluster.is_none() {
+                if let Some(c) = &data.cluster {
+                    state.infra.cluster = Some(ClusterStatus {
+                        nodes_total: c.nodes_total,
+                        nodes_ready: c.nodes_ready,
+                        offline_nodes: Vec::new(),
+                        checked_at_epoch_ms: data.updated_at_epoch_ms,
+                    });
+                }
+            }
+            state.infra.kusanagi = Some(data);
+            state.snapshot()
+        };
+        self.broadcast_only(&snapshot).await;
+        snapshot
+    }
+
+    pub async fn set_ecoledirecte_events(
+        &self,
+        ed_events: Vec<OrgEvent>,
+        status: EcoleDirecteStatus,
+    ) -> IrisSnapshot {
+        let snapshot = {
+            let mut state = self.inner.write().await;
+            state.ecoledirecte = Some(status);
+            state.events.retain(|e| e.source != "ecoledirecte");
+            state.events.extend(ed_events);
+            state.events.sort_by(|a, b| {
+                a.date
+                    .cmp(&b.date)
+                    .then_with(|| a.start_time.cmp(&b.start_time))
+            });
+            state.snapshot()
+        };
+        self.broadcast_only(&snapshot).await;
+        snapshot
+    }
+
+    pub async fn apply_fast_telemetry(
+        &self,
+        ha: Option<HomeAssistantData>,
+        kusanagi: Option<KusanagiInfraData>,
+        slack_messages: Option<Vec<SlackMessageItem>>,
+    ) -> IrisSnapshot {
+        let snapshot = {
+            let mut state = self.inner.write().await;
+            if let Some(ha_data) = ha {
+                state.home_assistant = Some(ha_data);
+            }
+            if let Some(k_data) = kusanagi {
+                if state.infra.cluster.is_none() {
+                    if let Some(c) = &k_data.cluster {
+                        state.infra.cluster = Some(ClusterStatus {
+                            nodes_total: c.nodes_total,
+                            nodes_ready: c.nodes_ready,
+                            offline_nodes: Vec::new(),
+                            checked_at_epoch_ms: k_data.updated_at_epoch_ms,
+                        });
+                    }
+                }
+                state.infra.kusanagi = Some(k_data);
+            }
+            if let Some(msgs) = slack_messages {
+                state.comms.slack_unread = msgs.len() as u32;
+                state.comms.slack_messages = msgs;
+                state.comms.updated_at_epoch_ms = Utc::now().timestamp_millis();
+            }
+            state.snapshot()
+        };
+        self.broadcast_only(&snapshot).await;
+        snapshot
+    }
+
+    pub async fn apply_slow_feeds(
+        &self,
+        weather: Option<WeatherForecast>,
+        ical_events: Option<Vec<OrgEvent>>,
+        cluster: Option<ClusterStatus>,
+        open_prs: Option<Vec<GitHubPrSummary>>,
+        shopping: Option<Vec<ShoppingItem>>,
+        ed: Option<(Vec<OrgEvent>, EcoleDirecteStatus)>,
+    ) -> IrisSnapshot {
+        let snapshot = {
+            let mut state = self.inner.write().await;
+            if let Some(w) = weather {
+                state.weather = Some(w);
+            }
+            if let Some(ical) = ical_events {
+                state.events.retain(|e| e.source != "ical");
+                state.events.extend(ical);
+            }
+            if let Some(c) = cluster {
+                state.infra.cluster = Some(c);
+            }
+            if let Some(prs) = open_prs {
+                state.infra.open_prs = prs;
+            }
+            if let Some(items) = shopping {
+                state.shopping_list = items;
+            }
+            if let Some((ed_events, ed_status)) = ed {
+                state.ecoledirecte = Some(ed_status);
+                state.events.retain(|e| e.source != "ecoledirecte");
+                state.events.extend(ed_events);
+            }
+            state.events.sort_by(|a, b| {
+                a.date
+                    .cmp(&b.date)
+                    .then_with(|| a.start_time.cmp(&b.start_time))
+            });
+            state.snapshot()
+        };
+        self.broadcast_only(&snapshot).await;
+        snapshot
+    }
+
     pub async fn upsert_mail(&self, mail: OrgMail) -> IrisSnapshot {
         let (snapshot, persisted) = {
             let mut state = self.inner.write().await;
@@ -1015,5 +1161,25 @@ mod tests {
 
         assert_eq!(snap.notes.len(), 1);
         assert_eq!(snap.notes[0].text, "Vérifier backup MinIO");
+    }
+
+    #[tokio::test]
+    async fn kusanagi_critical_alerts_shift_barthes_to_connotation() {
+        use iris_core::KusanagiAlertsSummary;
+        let controller = IrisController::new(sample_state(), Arc::new(InMemoryRepo));
+        let kusanagi = KusanagiInfraData {
+            connected: true,
+            updated_at_epoch_ms: 1000,
+            alerts: Some(KusanagiAlertsSummary {
+                critical_count: 2,
+                warning_count: 0,
+                top_alerts: Vec::new(),
+            }),
+            ..Default::default()
+        };
+        let snap = controller
+            .apply_fast_telemetry(None, Some(kusanagi), None)
+            .await;
+        assert_eq!(snap.barthes_state, BarthesState::Connotation);
     }
 }
