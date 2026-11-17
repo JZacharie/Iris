@@ -1,6 +1,25 @@
 let currentSnapshot = null;
 let lastRenderedKey = null;
 let clockTimer = null;
+let dashboardAutoRefreshTimer = null;
+
+function startDashboardAutoRefresh(screenId, refreshSeconds) {
+  stopDashboardAutoRefresh();
+  const intervalMs = Math.max(15, (refreshSeconds || 60)) * 1000;
+  dashboardAutoRefreshTimer = setInterval(() => {
+    const img = document.getElementById("dashboard-render-img");
+    if (img) {
+      img.src = `/api/renders/${encodeURIComponent(screenId)}?t=${Date.now()}`;
+    }
+  }, intervalMs);
+}
+
+function stopDashboardAutoRefresh() {
+  if (dashboardAutoRefreshTimer) {
+    clearInterval(dashboardAutoRefreshTimer);
+    dashboardAutoRefreshTimer = null;
+  }
+}
 
 async function api(path, method = "GET", body = null) {
   const opts = { method, headers: { "Content-Type": "application/json" } };
@@ -164,10 +183,21 @@ const GRAFANA_DASHBOARDS = [
   { label: "🛡️ Trivy Security", url: "https://grafana.zacharie.org/d/trivy-security-overview/trivy-security-dashboard" }
 ];
 
+const OPENOBSERVE_DASHBOARDS = [
+  { label: "⚡ Pylos AI Gateway", id: "7526637916655718400", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard_id=7526637916655718400" },
+  { label: "🤖 LLM Consommation", id: "7516513601809571840", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard_id=7516513601809571840" },
+  { label: "📊 Consommation Gemini", id: "7516531994134597633", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard_id=7516531994134597633" },
+  { label: "🔭 Antigravity Complete", id: "7516898066293608448", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard_id=7516898066293608448" },
+  { label: "📈 Antigravity Metrics", id: "7516898328903180289", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard_id=7516898328903180289" },
+  { label: "☸️ ETCD Objects", id: "k8s-etcd-objects-inventory", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard_id=k8s-etcd-objects-inventory" },
+  { label: "📨 NATS Messaging", id: "7502190361909927936", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard_id=7502190361909927936" }
+];
+
 function renderStage(snap) {
   const screen = snap.displayedScreen;
   const stage = document.getElementById("stage");
   if (!screen) {
+    stopDashboardAutoRefresh();
     stage.innerHTML = `<div class="org-view"><h2>Aucun écran configuré</h2></div>`;
     return;
   }
@@ -179,22 +209,29 @@ function renderStage(snap) {
     const rawUrl = (!screen.url || screen.url.endsWith("/d/") || screen.url.endsWith("/d"))
       ? GRAFANA_DASHBOARDS[0].url
       : screen.url;
-    const iframeUrl = (!snap.formattedUrl || snap.formattedUrl.includes("/d/?"))
-      ? `${GRAFANA_DASHBOARDS[0].url}?kiosk&theme=dark&refresh=30s`
+    const directUrl = (!snap.formattedUrl || snap.formattedUrl.includes("/d/?"))
+      ? `${GRAFANA_DASHBOARDS[0].url}?kiosk=tv&theme=dark&refresh=30s`
       : snap.formattedUrl;
+    const renderImgUrl = `/api/renders/${encodeURIComponent(screen.id)}?t=${Date.now()}`;
 
     stage.innerHTML = `
-      <div style="display:flex;flex-direction:column;width:100%;height:100%;">
-        <div class="grafana-bar">
-          <div class="row" style="gap:6px;flex-wrap:nowrap;">
+      <div class="dashboard-wrap">
+        <div class="dashboard-bar">
+          <div class="row" style="gap:6px;flex-wrap:nowrap;overflow-x:auto;">
             ${GRAFANA_DASHBOARDS.map((d) => {
               const active = rawUrl.includes(d.url.split("/d/")[1]?.split("/")[0] || d.url);
               return `<button class="pill grafana-preset ${active ? "active" : ""}" data-url="${escapeHtml(d.url)}">${escapeHtml(d.label)}</button>`;
             }).join("")}
           </div>
-          <a class="btn" href="${escapeHtml(iframeUrl)}" target="_blank" rel="noopener" style="text-decoration:none;white-space:nowrap;font-size:12px;padding:5px 10px;">↗ Ouvrir Grafana</a>
+          <div class="row" style="gap:8px;flex-shrink:0;">
+            <button class="btn btn-force-render" id="btn-force-render-dash" style="font-size:12px;padding:5px 10px;">↻ Forcer le rendu</button>
+            <span class="render-badge">⚡ Pré-rendu K8s</span>
+            <a class="btn" href="${escapeHtml(directUrl)}" target="_blank" rel="noopener" style="text-decoration:none;white-space:nowrap;font-size:12px;padding:5px 10px;">↗ Ouvrir en direct</a>
+          </div>
         </div>
-        <iframe class="dashboard-frame" style="flex:1;height:calc(100% - 44px);" src="${escapeHtml(iframeUrl)}" allow="fullscreen"></iframe>
+        <div class="dashboard-img-container">
+          <img id="dashboard-render-img" class="dashboard-render-img" src="${renderImgUrl}" alt="Grafana Pré-rendu" />
+        </div>
       </div>
     `;
 
@@ -209,10 +246,113 @@ function renderStage(snap) {
         });
       };
     });
+
+    const forceBtn = document.getElementById("btn-force-render-dash");
+    if (forceBtn) {
+      forceBtn.onclick = async () => {
+        forceBtn.disabled = true;
+        forceBtn.textContent = "⏳ Rendu...";
+        try {
+          await api(`/api/renders/${encodeURIComponent(screen.id)}/refresh`, "POST");
+          const img = document.getElementById("dashboard-render-img");
+          if (img) img.src = `/api/renders/${encodeURIComponent(screen.id)}?t=${Date.now()}`;
+          forceBtn.textContent = "✓ À jour";
+          setTimeout(() => {
+            forceBtn.disabled = false;
+            forceBtn.textContent = "↻ Forcer le rendu";
+          }, 2000);
+        } catch (e) {
+          forceBtn.disabled = false;
+          forceBtn.textContent = "⚠️ Erreur";
+          setTimeout(() => {
+            forceBtn.disabled = false;
+            forceBtn.textContent = "↻ Forcer le rendu";
+          }, 3000);
+        }
+      };
+    }
+
+    startDashboardAutoRefresh(screen.id, screen.autoRefreshSeconds);
     return;
   }
 
-  if (screen.type === "OPENOBSERVE" || screen.type === "WEB") {
+  if (screen.type === "OPENOBSERVE") {
+    if (lastRenderedKey === key) return;
+    lastRenderedKey = key;
+    const rawUrl = (!screen.url || screen.url.trim().length === 0)
+      ? OPENOBSERVE_DASHBOARDS[0].id
+      : screen.url;
+    const directUrl = (snap.formattedUrl && !snap.formattedUrl.endsWith("/dashboards"))
+      ? snap.formattedUrl
+      : (screen.url && screen.url.startsWith("http"))
+      ? screen.url
+      : `https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard_id=${encodeURIComponent(rawUrl)}&hide_header=true`;
+    const renderImgUrl = `/api/renders/${encodeURIComponent(screen.id)}?t=${Date.now()}`;
+
+    stage.innerHTML = `
+      <div class="dashboard-wrap">
+        <div class="dashboard-bar">
+          <div class="row" style="gap:6px;flex-wrap:nowrap;overflow-x:auto;">
+            ${OPENOBSERVE_DASHBOARDS.map((d) => {
+              const active = rawUrl.includes(d.id);
+              return `<button class="pill openobserve-preset ${active ? "active" : ""}" data-url="${escapeHtml(d.url)}">${escapeHtml(d.label)}</button>`;
+            }).join("")}
+          </div>
+          <div class="row" style="gap:8px;flex-shrink:0;">
+            <button class="btn btn-force-render" id="btn-force-render-dash" style="font-size:12px;padding:5px 10px;">↻ Forcer le rendu</button>
+            <span class="render-badge">⚡ Pré-rendu K8s</span>
+            <a class="btn" href="${escapeHtml(directUrl)}" target="_blank" rel="noopener" style="text-decoration:none;white-space:nowrap;font-size:12px;padding:5px 10px;">↗ Ouvrir en direct</a>
+          </div>
+        </div>
+        <div class="dashboard-img-container">
+          <img id="dashboard-render-img" class="dashboard-render-img" src="${renderImgUrl}" alt="OpenObserve Pré-rendu" />
+        </div>
+      </div>
+    `;
+
+    stage.querySelectorAll(".openobserve-preset").forEach((btn) => {
+      btn.onclick = () => {
+        const newUrl = btn.dataset.url;
+        if (!newUrl) return;
+        lastRenderedKey = null;
+        api("/api/screens", "POST", {
+          ...screen,
+          url: newUrl
+        });
+      };
+    });
+
+    const forceBtn = document.getElementById("btn-force-render-dash");
+    if (forceBtn) {
+      forceBtn.onclick = async () => {
+        forceBtn.disabled = true;
+        forceBtn.textContent = "⏳ Rendu...";
+        try {
+          await api(`/api/renders/${encodeURIComponent(screen.id)}/refresh`, "POST");
+          const img = document.getElementById("dashboard-render-img");
+          if (img) img.src = `/api/renders/${encodeURIComponent(screen.id)}?t=${Date.now()}`;
+          forceBtn.textContent = "✓ À jour";
+          setTimeout(() => {
+            forceBtn.disabled = false;
+            forceBtn.textContent = "↻ Forcer le rendu";
+          }, 2000);
+        } catch (e) {
+          forceBtn.disabled = false;
+          forceBtn.textContent = "⚠️ Erreur";
+          setTimeout(() => {
+            forceBtn.disabled = false;
+            forceBtn.textContent = "↻ Forcer le rendu";
+          }, 3000);
+        }
+      };
+    }
+
+    startDashboardAutoRefresh(screen.id, screen.autoRefreshSeconds);
+    return;
+  }
+
+  if (screen.type === "WEB") {
+    stopDashboardAutoRefresh();
     if (lastRenderedKey === key) return;
     lastRenderedKey = key;
     if (!snap.formattedUrl) {
@@ -223,6 +363,7 @@ function renderStage(snap) {
     return;
   }
 
+  stopDashboardAutoRefresh();
   lastRenderedKey = null;
   if (screen.type === "ORG_OVERVIEW") renderOrgOverview(stage, snap);
   else if (screen.type === "ORG_HOME") renderOrgHome(stage, snap);

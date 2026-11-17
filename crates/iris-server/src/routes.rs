@@ -10,9 +10,10 @@ use chrono::Utc;
 use iris_application::IrisController;
 use iris_core::{
     ActiveAlert, AgentUpgradeReport, AlertSeverity, CommsStatus, DeckButton, DisplayScreen,
-    DriveOrder, IrisSettings, IrisSnapshot, OrgEvent, OrgMail, PcTelemetry, ShoppingItem,
+    DriveOrder, IrisSettings, IrisSnapshot, OrgEvent, OrgMail, PcTelemetry, ScreenType,
+    ShoppingItem,
 };
-use iris_infrastructure::{AmarakiClient, RumqttcAdapter};
+use iris_infrastructure::{AmarakiClient, DashboardRenderer, RumqttcAdapter};
 use prometheus::{Encoder, TextEncoder};
 use serde::Deserialize;
 use serde_json::Value;
@@ -22,12 +23,16 @@ use uuid::Uuid;
 pub struct AppState {
     pub controller: Arc<IrisController>,
     pub mqtt: Arc<RumqttcAdapter>,
+    pub renderer: Arc<DashboardRenderer>,
 }
 
 pub fn api_router(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(health))
         .route("/metrics", get(metrics))
+        .route("/api/renders/{id}", get(get_screen_render))
+        .route("/api/renders/{id}/refresh", post(refresh_screen_render))
+        .route("/api/renders/{id}/meta", get(get_render_meta))
         .route("/api/state", get(get_state))
         .route("/api/screen/select", post(select_screen))
         .route("/api/screen/next", post(next_screen))
@@ -734,5 +739,219 @@ async fn handle_ws(mut socket: WebSocket, state: AppState) {
                 }
             }
         }
+    }
+}
+
+#[derive(Deserialize)]
+struct RenderQuery {
+    #[serde(default)]
+    force: bool,
+}
+
+async fn get_screen_render(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<RenderQuery>,
+) -> impl IntoResponse {
+    if !query.force {
+        if let Some(entry) = state.renderer.get_cached(&id).await {
+            let rendered_at_str = entry.rendered_at.to_rfc3339();
+            return (
+                StatusCode::OK,
+                [
+                    (header::CONTENT_TYPE, "image/png"),
+                    (header::CACHE_CONTROL, "public, max-age=15"),
+                    (
+                        header::HeaderName::from_static("x-iris-rendered-at"),
+                        rendered_at_str.as_str(),
+                    ),
+                ],
+                entry.image_png,
+            )
+                .into_response();
+        }
+    }
+
+    let snap = state.controller.snapshot().await;
+    let screen = snap.screens.iter().find(|s| s.id == id).cloned().or_else(|| {
+        if id == "grafana" || id.contains("grafana") {
+            Some(DisplayScreen {
+                id: id.clone(),
+                name: "Grafana".to_string(),
+                screen_type: ScreenType::Grafana,
+                url: "https://grafana.zacharie.org/d/b9b5adf3-6cdb-409d-86ae-0482e25fc165/k8s-dashboard".to_string(),
+                kiosk_mode: true,
+                auto_refresh_seconds: 60,
+                enabled: true,
+                is_alert_target: false,
+            })
+        } else if id == "openobserve" || id.contains("openobserve") || id.contains("o2") {
+            Some(DisplayScreen {
+                id: id.clone(),
+                name: "OpenObserve".to_string(),
+                screen_type: ScreenType::OpenObserve,
+                url: "7526637916655718400".to_string(),
+                kiosk_mode: true,
+                auto_refresh_seconds: 60,
+                enabled: true,
+                is_alert_target: false,
+            })
+        } else {
+            None
+        }
+    });
+
+    let screen = match screen {
+        Some(s) => s,
+        None => {
+            let svg = DashboardRenderer::generate_fallback_svg(&id, "Écran introuvable");
+            return (
+                StatusCode::NOT_FOUND,
+                [(header::CONTENT_TYPE, "image/svg+xml")],
+                svg,
+            )
+                .into_response();
+        }
+    };
+
+    let target_url = if screen.url.trim().is_empty() {
+        &snap.formatted_url
+    } else {
+        &screen.url
+    };
+
+    match state
+        .renderer
+        .render_and_cache(&screen.id, screen.screen_type, target_url)
+        .await
+    {
+        Ok(entry) => {
+            let rendered_at_str = entry.rendered_at.to_rfc3339();
+            (
+                StatusCode::OK,
+                [
+                    (header::CONTENT_TYPE, "image/png"),
+                    (header::CACHE_CONTROL, "public, max-age=15"),
+                    (
+                        header::HeaderName::from_static("x-iris-rendered-at"),
+                        rendered_at_str.as_str(),
+                    ),
+                ],
+                entry.image_png,
+            )
+                .into_response()
+        }
+        Err(err) => {
+            tracing::error!(screen = %screen.name, error = %err, "Failed to render screen");
+            let svg = DashboardRenderer::generate_fallback_svg(&screen.name, &err.to_string());
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                [(header::CONTENT_TYPE, "image/svg+xml")],
+                svg,
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn refresh_screen_render(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let snap = state.controller.snapshot().await;
+    let screen = snap.screens.iter().find(|s| s.id == id).cloned().or_else(|| {
+        if id == "grafana" || id.contains("grafana") {
+            Some(DisplayScreen {
+                id: id.clone(),
+                name: "Grafana".to_string(),
+                screen_type: ScreenType::Grafana,
+                url: "https://grafana.zacharie.org/d/b9b5adf3-6cdb-409d-86ae-0482e25fc165/k8s-dashboard".to_string(),
+                kiosk_mode: true,
+                auto_refresh_seconds: 60,
+                enabled: true,
+                is_alert_target: false,
+            })
+        } else if id == "openobserve" || id.contains("openobserve") || id.contains("o2") {
+            Some(DisplayScreen {
+                id: id.clone(),
+                name: "OpenObserve".to_string(),
+                screen_type: ScreenType::OpenObserve,
+                url: "7526637916655718400".to_string(),
+                kiosk_mode: true,
+                auto_refresh_seconds: 60,
+                enabled: true,
+                is_alert_target: false,
+            })
+        } else {
+            None
+        }
+    });
+
+    let screen = match screen {
+        Some(s) => s,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": format!("screen '{id}' not found") })),
+            )
+                .into_response();
+        }
+    };
+
+    let target_url = if screen.url.trim().is_empty() {
+        &snap.formatted_url
+    } else {
+        &screen.url
+    };
+
+    match state
+        .renderer
+        .render_and_cache(&screen.id, screen.screen_type, target_url)
+        .await
+    {
+        Ok(entry) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "status": "ok",
+                "screen_id": screen.id,
+                "rendered_at": entry.rendered_at.to_rfc3339(),
+                "duration_ms": entry.duration_ms,
+                "bytes": entry.image_png.len(),
+            })),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn get_render_meta(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if let Some(entry) = state.renderer.get_cached(&id).await {
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "screen_id": id,
+                "cached": true,
+                "rendered_at": entry.rendered_at.to_rfc3339(),
+                "duration_ms": entry.duration_ms,
+                "bytes": entry.image_png.len(),
+            })),
+        )
+            .into_response()
+    } else {
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "screen_id": id,
+                "cached": false,
+            })),
+        )
+            .into_response()
     }
 }

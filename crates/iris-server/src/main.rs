@@ -6,7 +6,7 @@ mod routes;
 use std::sync::Arc;
 
 use iris_application::{IrisController, StateRepository};
-use iris_infrastructure::{JsonFileRepository, RumqttcAdapter};
+use iris_infrastructure::{DashboardRenderer, JsonFileRepository, RumqttcAdapter};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::info;
@@ -45,7 +45,18 @@ async fn main() -> anyhow::Result<()> {
         .await;
     mqtt.connect(initial.settings.mqtt).await;
 
-    let app_state = AppState { controller, mqtt };
+    let renderer = Arc::new(DashboardRenderer::from_env());
+    DashboardRenderer::spawn_background_refresher(
+        Arc::clone(&renderer),
+        Arc::clone(&controller),
+        std::time::Duration::from_secs(60),
+    );
+
+    let app_state = AppState {
+        controller,
+        mqtt,
+        renderer,
+    };
 
     let app = api_router(app_state)
         .fallback(serve_static)

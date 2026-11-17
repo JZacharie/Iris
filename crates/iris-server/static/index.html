@@ -175,10 +175,24 @@
     .barthes-PUNCTUM { background: rgba(239,68,68,0.24); border-color: var(--crit); color: #fecaca; animation: pulse 1.4s infinite; }
     @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.65; } }
     .deck-telemetry { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 20px; }
-    .grafana-bar {
+    .grafana-bar, .dashboard-bar {
       display: flex; align-items: center; justify-content: space-between; gap: 8px;
       padding: 6px 14px; background: var(--surface); border-bottom: 1px solid var(--border);
       overflow-x: auto; min-height: 44px;
+    }
+    .dashboard-wrap {
+      display: flex; flex-direction: column; width: 100%; height: 100%; overflow: hidden; background: var(--bg);
+    }
+    .dashboard-img-container {
+      flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; background: #090d16; width: 100%; height: calc(100% - 44px);
+    }
+    .dashboard-render-img {
+      width: 100%; height: 100%; object-fit: contain; display: block; border-radius: 4px;
+    }
+    .render-badge {
+      display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700;
+      padding: 3px 8px; border-radius: 999px; background: rgba(56, 189, 248, 0.15);
+      border: 1px solid rgba(56, 189, 248, 0.4); color: var(--primary); white-space: nowrap;
     }
     .metric-card {
       background: linear-gradient(145deg, rgba(17,24,39,0.95), rgba(30,41,59,0.65));

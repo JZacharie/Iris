@@ -14,6 +14,9 @@ pub enum IrisError {
     #[error("persistence error: {0}")]
     Persistence(String),
 
+    #[error("render error: {0}")]
+    Render(String),
+
     #[error("mqtt error: {0}")]
     Mqtt(String),
 }
