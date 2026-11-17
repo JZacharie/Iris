@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ScreenType {
     Grafana,
+    #[serde(alias = "OPENOBSERVE")]
     OpenObserve,
     Web,
     OrgOverview,

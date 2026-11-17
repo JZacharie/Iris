@@ -55,6 +55,7 @@ const SCREEN_ICONS = {
   ORG_AGENDA: "📅",
   ORG_NOTES: "📌",
   ORG_CLOCK: "🕒",
+  OPEN_OBSERVE: "🔭",
   OPENOBSERVE: "🔭",
   GRAFANA: "📊",
   ORG_STREAM_DECK: "🎛️",
@@ -276,7 +277,7 @@ function renderStage(snap) {
     return;
   }
 
-  if (screen.type === "OPENOBSERVE") {
+  if (screen.type === "OPEN_OBSERVE" || screen.type === "OPENOBSERVE") {
     if (lastRenderedKey === key) return;
     lastRenderedKey = key;
     const rawUrl = (!screen.url || screen.url.trim().length === 0)
