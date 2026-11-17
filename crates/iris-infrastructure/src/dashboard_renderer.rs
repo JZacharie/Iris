@@ -376,7 +376,7 @@ impl DashboardRenderer {
         // If raw is just an ID (e.g. numeric "7526637916655718400" or slug)
         if !trimmed.is_empty() && !trimmed.contains('/') {
             return format!(
-                "{}/web/dashboards/view?org_identifier=default&dashboard_id={}&hide_header=true",
+                "{}/web/dashboards/view?org_identifier=default&dashboard={}&folder=default&hide_header=true",
                 self.config.openobserve_internal_url, trimmed
             );
         }
@@ -385,16 +385,23 @@ impl DashboardRenderer {
             || trimmed.ends_with("/dashboards")
             || trimmed.ends_with("/dashboards/")
         {
-            "/web/dashboards/view?org_identifier=default&dashboard_id=7526637916655718400"
+            "/web/dashboards/view?org_identifier=default&dashboard=7526637916655718400&folder=default"
         } else if let Some(idx) = trimmed.find("/web/") {
             &trimmed[idx..]
         } else if trimmed.starts_with('/') {
             trimmed
         } else {
-            "/web/dashboards/view?org_identifier=default&dashboard_id=7526637916655718400"
+            "/web/dashboards/view?org_identifier=default&dashboard=7526637916655718400&folder=default"
         };
 
         let mut url = format!("{}{}", self.config.openobserve_internal_url, base_path);
+        if url.contains("dashboard_id=") {
+            url = url.replace("dashboard_id=", "dashboard=");
+        }
+        if !url.contains("folder=") {
+            let sep = if url.contains('?') { '&' } else { '?' };
+            url = format!("{url}{sep}folder=default");
+        }
         if !url.contains("hide_header") {
             let sep = if url.contains('?') { '&' } else { '?' };
             url = format!("{url}{sep}hide_header=true");
@@ -541,7 +548,7 @@ mod tests {
         let url = r.format_internal_openobserve_url("7526637916655718400");
         assert_eq!(
             url,
-            "http://o2-openobserve-router.openobserve.svc:5080/web/dashboards/view?org_identifier=default&dashboard_id=7526637916655718400&hide_header=true"
+            "http://o2-openobserve-router.openobserve.svc:5080/web/dashboards/view?org_identifier=default&dashboard=7526637916655718400&folder=default&hide_header=true"
         );
     }
 }

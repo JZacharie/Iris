@@ -185,13 +185,13 @@ const GRAFANA_DASHBOARDS = [
 ];
 
 const OPENOBSERVE_DASHBOARDS = [
-  { label: "⚡ Pylos AI Gateway", id: "7526637916655718400", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard_id=7526637916655718400" },
-  { label: "🤖 LLM Consommation", id: "7516513601809571840", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard_id=7516513601809571840" },
-  { label: "📊 Consommation Gemini", id: "7516531994134597633", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard_id=7516531994134597633" },
-  { label: "🔭 Antigravity Complete", id: "7516898066293608448", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard_id=7516898066293608448" },
-  { label: "📈 Antigravity Metrics", id: "7516898328903180289", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard_id=7516898328903180289" },
-  { label: "☸️ ETCD Objects", id: "k8s-etcd-objects-inventory", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard_id=k8s-etcd-objects-inventory" },
-  { label: "📨 NATS Messaging", id: "7502190361909927936", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard_id=7502190361909927936" }
+  { label: "⚡ Pylos AI Gateway", id: "7526637916655718400", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=7526637916655718400&folder=default" },
+  { label: "🤖 LLM Consommation", id: "7516513601809571840", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=7516513601809571840&folder=default" },
+  { label: "📊 Consommation Gemini", id: "7516531994134597633", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=7516531994134597633&folder=default" },
+  { label: "🔭 Antigravity Complete", id: "7516898066293608448", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=7516898066293608448&folder=default" },
+  { label: "📈 Antigravity Metrics", id: "7516898328903180289", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=7516898328903180289&folder=default" },
+  { label: "☸️ ETCD Objects", id: "k8s-etcd-objects-inventory", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=k8s-etcd-objects-inventory&folder=default" },
+  { label: "📨 NATS Messaging", id: "7502190361909927936", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=7502190361909927936&folder=default" }
 ];
 
 function renderStage(snap) {
@@ -313,7 +313,7 @@ function renderStage(snap) {
       ? snap.formattedUrl
       : (screen.url && screen.url.startsWith("http"))
       ? screen.url
-      : `https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard_id=${encodeURIComponent(rawUrl)}&hide_header=true`;
+      : `https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=${encodeURIComponent(rawUrl)}&folder=default&hide_header=true`;
     const renderImgUrl = `/api/renders/${encodeURIComponent(screen.id)}?t=${Date.now()}`;
 
     stage.innerHTML = `
