@@ -143,7 +143,21 @@ async fn upsert_screen(
     State(state): State<AppState>,
     Json(screen): Json<DisplayScreen>,
 ) -> Json<IrisSnapshot> {
-    Json(state.controller.upsert_screen(screen).await)
+    let screen_type = screen.screen_type;
+    let screen_id = screen.id.clone();
+    let screen_url = screen.url.clone();
+    let snap = state.controller.upsert_screen(screen).await;
+
+    if matches!(screen_type, ScreenType::Grafana | ScreenType::OpenObserve) {
+        let renderer = state.renderer.clone();
+        tokio::spawn(async move {
+            let _ = renderer
+                .render_and_cache(&screen_id, screen_type, &screen_url)
+                .await;
+        });
+    }
+
+    Json(snap)
 }
 
 async fn delete_screen(

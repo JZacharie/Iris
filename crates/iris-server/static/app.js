@@ -237,14 +237,40 @@ function renderStage(snap) {
     `;
 
     stage.querySelectorAll(".grafana-preset").forEach((btn) => {
-      btn.onclick = () => {
+      btn.onclick = async () => {
         const newUrl = btn.dataset.url;
         if (!newUrl) return;
         lastRenderedKey = null;
-        api("/api/screens", "POST", {
+        stage.querySelectorAll(".grafana-preset").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        const forceBtn = document.getElementById("btn-force-render-dash");
+        if (forceBtn) {
+          forceBtn.disabled = true;
+          forceBtn.textContent = "⏳ Rendu...";
+        }
+        await api("/api/screens", "POST", {
           ...screen,
           url: newUrl
         });
+        if (forceBtn) {
+          try {
+            await api(`/api/renders/${encodeURIComponent(screen.id)}/refresh`, "POST");
+            const img = document.getElementById("dashboard-render-img");
+            if (img) img.src = `/api/renders/${encodeURIComponent(screen.id)}?t=${Date.now()}`;
+            forceBtn.textContent = "✓ À jour";
+            setTimeout(() => {
+              forceBtn.disabled = false;
+              forceBtn.textContent = "↻ Forcer le rendu";
+            }, 2000);
+          } catch (e) {
+            forceBtn.disabled = false;
+            forceBtn.textContent = "⚠️ Erreur";
+            setTimeout(() => {
+              forceBtn.disabled = false;
+              forceBtn.textContent = "↻ Forcer le rendu";
+            }, 3000);
+          }
+        }
       };
     });
 
@@ -312,14 +338,40 @@ function renderStage(snap) {
     `;
 
     stage.querySelectorAll(".openobserve-preset").forEach((btn) => {
-      btn.onclick = () => {
+      btn.onclick = async () => {
         const newUrl = btn.dataset.url;
         if (!newUrl) return;
         lastRenderedKey = null;
-        api("/api/screens", "POST", {
+        stage.querySelectorAll(".openobserve-preset").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        const forceBtn = document.getElementById("btn-force-render-dash");
+        if (forceBtn) {
+          forceBtn.disabled = true;
+          forceBtn.textContent = "⏳ Rendu...";
+        }
+        await api("/api/screens", "POST", {
           ...screen,
           url: newUrl
         });
+        if (forceBtn) {
+          try {
+            await api(`/api/renders/${encodeURIComponent(screen.id)}/refresh`, "POST");
+            const img = document.getElementById("dashboard-render-img");
+            if (img) img.src = `/api/renders/${encodeURIComponent(screen.id)}?t=${Date.now()}`;
+            forceBtn.textContent = "✓ À jour";
+            setTimeout(() => {
+              forceBtn.disabled = false;
+              forceBtn.textContent = "↻ Forcer le rendu";
+            }, 2000);
+          } catch (e) {
+            forceBtn.disabled = false;
+            forceBtn.textContent = "⚠️ Erreur";
+            setTimeout(() => {
+              forceBtn.disabled = false;
+              forceBtn.textContent = "↻ Forcer le rendu";
+            }, 3000);
+          }
+        }
       };
     });
 

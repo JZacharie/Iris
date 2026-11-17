@@ -238,10 +238,17 @@ impl DashboardRenderer {
     'Authorization': 'Basic {auth_b64}'
   }});
   await page.goto('{internal_url}', {{
-    waitUntil: 'domcontentloaded',
+    waitUntil: 'networkidle2',
     timeout: 30000
   }});
-  await new Promise(r => setTimeout(r, 4500));
+  try {{
+    await page.waitForFunction(() => {{
+      const cancelBtn = Array.from(document.querySelectorAll('button, span')).some(el => el.textContent && el.textContent.includes('Cancel'));
+      const spinners = document.querySelectorAll('.panel-loading, [data-testid="panel-loading"]');
+      return !cancelBtn && spinners.length === 0;
+    }}, {{ timeout: 12000 }});
+  }} catch (e) {{}}
+  await new Promise(r => setTimeout(r, 2000));
   const buffer = await page.screenshot({{
     type: 'png',
     fullPage: false
@@ -293,7 +300,7 @@ impl DashboardRenderer {
     window.location.href = url;
   }}, '{internal_url}');
 
-  await new Promise(r => setTimeout(r, 6500));
+  await new Promise(r => setTimeout(r, 7500));
   const buffer = await page.screenshot({{
     type: 'png',
     fullPage: false
@@ -374,7 +381,10 @@ impl DashboardRenderer {
             );
         }
 
-        let base_path = if trimmed.is_empty() {
+        let base_path = if trimmed.is_empty()
+            || trimmed.ends_with("/dashboards")
+            || trimmed.ends_with("/dashboards/")
+        {
             "/web/dashboards/view?org_identifier=default&dashboard_id=7526637916655718400"
         } else if let Some(idx) = trimmed.find("/web/") {
             &trimmed[idx..]
