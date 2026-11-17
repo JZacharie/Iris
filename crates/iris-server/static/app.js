@@ -306,14 +306,14 @@ function renderStage(snap) {
   if (screen.type === "OPEN_OBSERVE" || screen.type === "OPENOBSERVE") {
     if (lastRenderedKey === key) return;
     lastRenderedKey = key;
-    const rawUrl = (!screen.url || screen.url.trim().length === 0)
+    const rawUrl = (!screen.url || screen.url.trim().length === 0 || screen.url.endsWith("/dashboards") || screen.url.endsWith("/dashboards/"))
       ? OPENOBSERVE_DASHBOARDS[0].id
       : screen.url;
-    const directUrl = (snap.formattedUrl && !snap.formattedUrl.endsWith("/dashboards"))
+    const directUrl = (snap.formattedUrl && !snap.formattedUrl.endsWith("/dashboards") && !snap.formattedUrl.endsWith("/dashboards/"))
       ? snap.formattedUrl
-      : (screen.url && screen.url.startsWith("http"))
+      : (screen.url && screen.url.startsWith("http") && !screen.url.endsWith("/dashboards") && !screen.url.endsWith("/dashboards/"))
       ? screen.url
-      : `https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=${encodeURIComponent(rawUrl)}&folder=default&hide_header=true`;
+      : OPENOBSERVE_DASHBOARDS[0].url;
     const renderImgUrl = `/api/renders/${encodeURIComponent(screen.id)}?t=${Date.now()}`;
 
     stage.innerHTML = `
