@@ -28,12 +28,21 @@ async function api(path, method = "GET", body = null) {
   return res.json();
 }
 
+let lastReloadCounter = null;
+
 function connectWs() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${proto}//${location.host}/ws`);
   ws.onmessage = (ev) => {
     try {
       currentSnapshot = JSON.parse(ev.data);
+      if (lastReloadCounter !== null && typeof currentSnapshot.reloadCounter === "number" && currentSnapshot.reloadCounter > lastReloadCounter) {
+        console.log("Server requested reload, refreshing Iris kiosk page...", currentSnapshot.reloadCounter);
+        lastReloadCounter = currentSnapshot.reloadCounter;
+        window.location.reload(true);
+        return;
+      }
+      lastReloadCounter = currentSnapshot.reloadCounter;
       render(currentSnapshot);
     } catch (_) {}
   };

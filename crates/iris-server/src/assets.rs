@@ -22,9 +22,16 @@ pub async fn serve_static(uri: Uri) -> impl IntoResponse {
 
 fn build_response(path: &str, bytes: Vec<u8>) -> Response {
     let mime = mime_guess::from_path(path).first_or_octet_stream();
+    let cache_control = if path.ends_with(".html") || path.ends_with(".js") {
+        "no-cache, no-store, must-revalidate"
+    } else {
+        "public, max-age=3600"
+    };
+
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, mime.as_ref())
+        .header(header::CACHE_CONTROL, cache_control)
         .body(Body::from(bytes))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }

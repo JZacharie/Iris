@@ -1,11 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use iris_core::{IrisError, Result, ScreenType};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
 const DEFAULT_BROWSERLESS_URL: &str = "http://browserless-chrome.browserless-chrome.svc/function";
@@ -42,7 +42,7 @@ impl Default for DashboardRendererConfig {
             openobserve_password: DEFAULT_OPENOBSERVE_PASSWORD.to_string(),
             viewport_width: 1920,
             viewport_height: 1080,
-            timeout_seconds: 40,
+            timeout_seconds: 60,
         }
     }
 }
@@ -104,6 +104,7 @@ pub struct DashboardRenderer {
     config: DashboardRendererConfig,
     http: reqwest::Client,
     cache: Arc<RwLock<HashMap<String, RenderCacheEntry>>>,
+    in_flight: Arc<Mutex<HashSet<String>>>,
 }
 
 impl DashboardRenderer {
@@ -116,6 +117,7 @@ impl DashboardRenderer {
             config,
             http,
             cache: Arc::new(RwLock::new(HashMap::new())),
+            in_flight: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -138,6 +140,32 @@ impl DashboardRenderer {
         screen_type: ScreenType,
         target_url: &str,
     ) -> Result<RenderCacheEntry> {
+        // Single-flight deduplication: prevent duplicate concurrent renders for the same screen
+        loop {
+            let is_busy = {
+                let mut guard = self.in_flight.lock().await;
+                if guard.contains(screen_id) {
+                    true
+                } else {
+                    guard.insert(screen_id.to_string());
+                    false
+                }
+            };
+
+            if !is_busy {
+                break;
+            }
+
+            // A render for this screen is already running, await it
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            if let Some(cached) = self.get_cached(screen_id).await {
+                // If the cached entry was rendered less than 15s ago, reuse it directly
+                if (Utc::now() - cached.rendered_at).num_seconds() < 15 {
+                    return Ok(cached);
+                }
+            }
+        }
+
         let start = Instant::now();
         info!(
             screen_id = %screen_id,
@@ -146,7 +174,15 @@ impl DashboardRenderer {
             "Starting dashboard pre-render via browserless-chrome"
         );
 
-        let image_png = self.render_screen(screen_type, target_url).await?;
+        let render_res = self.render_screen(screen_type, target_url).await;
+
+        // Release in-flight flag
+        {
+            let mut guard = self.in_flight.lock().await;
+            guard.remove(screen_id);
+        }
+
+        let image_png = render_res?;
         let duration_ms = start.elapsed().as_millis() as u64;
         let entry = RenderCacheEntry {
             image_png,
@@ -233,22 +269,61 @@ impl DashboardRenderer {
 
                 let script = format!(
                     r#"module.exports = async ({{ page }}) => {{
+  let pendingQueries = 0;
+  let totalQueriesFired = 0;
+
+  page.on('request', req => {{
+    if (req.url().includes('/api/ds/query')) {{
+      pendingQueries++;
+      totalQueriesFired++;
+    }}
+  }});
+
+  page.on('requestfinished', req => {{
+    if (req.url().includes('/api/ds/query')) {{
+      pendingQueries = Math.max(0, pendingQueries - 1);
+    }}
+  }});
+
+  page.on('requestfailed', req => {{
+    if (req.url().includes('/api/ds/query')) {{
+      pendingQueries = Math.max(0, pendingQueries - 1);
+    }}
+  }});
+
   await page.setViewport({{ width: {width}, height: {height}, deviceScaleFactor: 1 }});
   await page.setExtraHTTPHeaders({{
     'Authorization': 'Basic {auth_b64}'
   }});
   await page.goto('{internal_url}', {{
-    waitUntil: 'networkidle2',
-    timeout: 30000
+    waitUntil: 'domcontentloaded',
+    timeout: 35000
   }});
+
+  // 1. Wait up to 6s for dashboard queries to be dispatched by Grafana
+  for (let i = 0; i < 60; i++) {{
+    if (totalQueriesFired > 0) break;
+    await new Promise(r => setTimeout(r, 100));
+  }}
+
+  // 2. Wait up to 25s for all in-flight Prometheus queries to complete
+  for (let i = 0; i < 125; i++) {{
+    if (totalQueriesFired > 0 && pendingQueries === 0) break;
+    await new Promise(r => setTimeout(r, 200));
+  }}
+
+  // 3. Ensure no remaining panel loading spinners or cancel buttons exist
   try {{
     await page.waitForFunction(() => {{
       const cancelBtn = Array.from(document.querySelectorAll('button, span')).some(el => el.textContent && el.textContent.includes('Cancel'));
-      const spinners = document.querySelectorAll('.panel-loading, [data-testid="panel-loading"]');
+      const spinners = document.querySelectorAll('.panel-loading, [data-testid="panel-loading"], .fa-spinner');
       return !cancelBtn && spinners.length === 0;
-    }}, {{ timeout: 12000 }});
+    }}, {{ timeout: 5000 }});
   }} catch (e) {{}}
-  await new Promise(r => setTimeout(r, 2000));
+
+  // 4. Wait for uPlot/canvas drawing to settle
+  await new Promise(r => setTimeout(r, 2500));
+
   const buffer = await page.screenshot({{
     type: 'png',
     fullPage: false
@@ -269,6 +344,28 @@ impl DashboardRenderer {
 
                 let script = format!(
                     r#"module.exports = async ({{ page }}) => {{
+  let pendingO2Queries = 0;
+  let o2QueriesFired = 0;
+
+  page.on('request', req => {{
+    if (req.url().includes('/api/default/')) {{
+      pendingO2Queries++;
+      o2QueriesFired++;
+    }}
+  }});
+
+  page.on('requestfinished', req => {{
+    if (req.url().includes('/api/default/')) {{
+      pendingO2Queries = Math.max(0, pendingO2Queries - 1);
+    }}
+  }});
+
+  page.on('requestfailed', req => {{
+    if (req.url().includes('/api/default/')) {{
+      pendingO2Queries = Math.max(0, pendingO2Queries - 1);
+    }}
+  }});
+
   await page.setViewport({{ width: {width}, height: {height}, deviceScaleFactor: 1 }});
   await page.goto('{login_url}', {{
     waitUntil: 'domcontentloaded',
@@ -300,7 +397,19 @@ impl DashboardRenderer {
     window.location.href = url;
   }}, '{internal_url}');
 
-  await new Promise(r => setTimeout(r, 7500));
+  // Wait up to 5s for queries to start
+  for (let i = 0; i < 50; i++) {{
+    if (o2QueriesFired > 0) break;
+    await new Promise(r => setTimeout(r, 100));
+  }}
+
+  // Wait up to 20s for queries to finish
+  for (let i = 0; i < 100; i++) {{
+    if (o2QueriesFired > 0 && pendingO2Queries === 0) break;
+    await new Promise(r => setTimeout(r, 200));
+  }}
+
+  await new Promise(r => setTimeout(r, 2500));
   const buffer = await page.screenshot({{
     type: 'png',
     fullPage: false
