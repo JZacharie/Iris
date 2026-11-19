@@ -767,25 +767,6 @@ async fn get_screen_render(
     Path(id): Path<String>,
     axum::extract::Query(query): axum::extract::Query<RenderQuery>,
 ) -> impl IntoResponse {
-    if !query.force {
-        if let Some(entry) = state.renderer.get_cached(&id).await {
-            let rendered_at_str = entry.rendered_at.to_rfc3339();
-            return (
-                StatusCode::OK,
-                [
-                    (header::CONTENT_TYPE, "image/png"),
-                    (header::CACHE_CONTROL, "public, max-age=15"),
-                    (
-                        header::HeaderName::from_static("x-iris-rendered-at"),
-                        rendered_at_str.as_str(),
-                    ),
-                ],
-                entry.image_png,
-            )
-                .into_response();
-        }
-    }
-
     let snap = state.controller.snapshot().await;
     let screen = snap.screens.iter().find(|s| s.id == id).cloned().or_else(|| {
         if id == "grafana" || id.contains("grafana") {
@@ -804,7 +785,7 @@ async fn get_screen_render(
                 id: id.clone(),
                 name: "OpenObserve".to_string(),
                 screen_type: ScreenType::OpenObserve,
-                url: "7526637916655718400".to_string(),
+                url: "7516898066293608448".to_string(),
                 kiosk_mode: true,
                 auto_refresh_seconds: 60,
                 enabled: true,
@@ -833,6 +814,25 @@ async fn get_screen_render(
     } else {
         &screen.url
     };
+
+    if !query.force {
+        if let Some(entry) = state.renderer.get_cached_for_url(&id, target_url).await {
+            let rendered_at_str = entry.rendered_at.to_rfc3339();
+            return (
+                StatusCode::OK,
+                [
+                    (header::CONTENT_TYPE, "image/png"),
+                    (header::CACHE_CONTROL, "public, max-age=15"),
+                    (
+                        header::HeaderName::from_static("x-iris-rendered-at"),
+                        rendered_at_str.as_str(),
+                    ),
+                ],
+                entry.image_png,
+            )
+                .into_response();
+        }
+    }
 
     match state
         .renderer

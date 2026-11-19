@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use iris_core::{GitHubPrSummary, IrisError, Result};
 use serde::Deserialize;
-use tracing::warn;
+use tracing::{debug, warn};
 
 #[derive(Deserialize)]
 struct GitHubPull {
@@ -37,6 +37,8 @@ impl GitHubClient {
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
         let token = std::env::var("GITHUB_TOKEN")
+            .or_else(|_| std::env::var("IRIS_GITHUB_TOKEN"))
+            .or_else(|_| std::env::var("GH_TOKEN"))
             .ok()
             .map(|t| t.trim().to_string())
             .filter(|t| !t.is_empty());
@@ -53,7 +55,11 @@ impl GitHubClient {
             match self.fetch_repo_prs(repo).await {
                 Ok(mut prs) => all_prs.append(&mut prs),
                 Err(err) => {
-                    warn!(%err, repo, "Failed to fetch GitHub open PRs");
+                    if self.token.is_none() && err.to_string().contains("404") {
+                        debug!(%err, repo, "Skipping private GitHub repo (no GITHUB_TOKEN configured)");
+                    } else {
+                        warn!(%err, repo, "Failed to fetch GitHub open PRs");
+                    }
                 }
             }
         }

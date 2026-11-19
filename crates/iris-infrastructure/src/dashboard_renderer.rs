@@ -98,6 +98,7 @@ pub struct RenderCacheEntry {
     pub image_png: Vec<u8>,
     pub rendered_at: DateTime<Utc>,
     pub duration_ms: u64,
+    pub target_url: String,
 }
 
 pub struct DashboardRenderer {
@@ -134,20 +135,37 @@ impl DashboardRenderer {
         lock.get(screen_id).cloned()
     }
 
+    pub async fn get_cached_for_url(
+        &self,
+        screen_id: &str,
+        expected_url: &str,
+    ) -> Option<RenderCacheEntry> {
+        let lock = self.cache.read().await;
+        let entry = lock.get(screen_id)?;
+        if expected_url.trim().is_empty() || entry.target_url == expected_url.trim() {
+            Some(entry.clone())
+        } else {
+            None
+        }
+    }
+
     pub async fn render_and_cache(
         &self,
         screen_id: &str,
         screen_type: ScreenType,
         target_url: &str,
     ) -> Result<RenderCacheEntry> {
-        // Single-flight deduplication: prevent duplicate concurrent renders for the same screen
+        let normalized_target = target_url.trim().to_string();
+        let flight_key = format!("{screen_id}|{normalized_target}");
+
+        // Single-flight deduplication: prevent duplicate concurrent renders for the same screen+url
         loop {
             let is_busy = {
                 let mut guard = self.in_flight.lock().await;
-                if guard.contains(screen_id) {
+                if guard.contains(&flight_key) {
                     true
                 } else {
-                    guard.insert(screen_id.to_string());
+                    guard.insert(flight_key.clone());
                     false
                 }
             };
@@ -156,10 +174,9 @@ impl DashboardRenderer {
                 break;
             }
 
-            // A render for this screen is already running, await it
+            // A render for this exact screen+url is already running, await it
             tokio::time::sleep(Duration::from_millis(500)).await;
-            if let Some(cached) = self.get_cached(screen_id).await {
-                // If the cached entry was rendered less than 15s ago, reuse it directly
+            if let Some(cached) = self.get_cached_for_url(screen_id, &normalized_target).await {
                 if (Utc::now() - cached.rendered_at).num_seconds() < 15 {
                     return Ok(cached);
                 }
@@ -170,16 +187,16 @@ impl DashboardRenderer {
         info!(
             screen_id = %screen_id,
             screen_type = ?screen_type,
-            url = %target_url,
+            url = %normalized_target,
             "Starting dashboard pre-render via browserless-chrome"
         );
 
-        let render_res = self.render_screen(screen_type, target_url).await;
+        let render_res = self.render_screen(screen_type, &normalized_target).await;
 
         // Release in-flight flag
         {
             let mut guard = self.in_flight.lock().await;
-            guard.remove(screen_id);
+            guard.remove(&flight_key);
         }
 
         let image_png = render_res?;
@@ -188,6 +205,7 @@ impl DashboardRenderer {
             image_png,
             rendered_at: Utc::now(),
             duration_ms,
+            target_url: normalized_target,
         };
 
         {
@@ -206,14 +224,24 @@ impl DashboardRenderer {
 
     pub async fn render_screen(&self, screen_type: ScreenType, raw_url: &str) -> Result<Vec<u8>> {
         let script = self.build_puppeteer_script(screen_type, raw_url)?;
+        let endpoint = if self.config.browserless_url.contains("timeout=") {
+            self.config.browserless_url.clone()
+        } else {
+            let sep = if self.config.browserless_url.contains('?') {
+                '&'
+            } else {
+                '?'
+            };
+            format!("{}{sep}timeout=55000", self.config.browserless_url)
+        };
         debug!(
-            browserless_url = %self.config.browserless_url,
+            browserless_url = %endpoint,
             "Sending puppeteer script to browserless"
         );
 
         let response = self
             .http
-            .post(&self.config.browserless_url)
+            .post(&endpoint)
             .header("Content-Type", "application/javascript")
             .body(script)
             .send()
@@ -221,7 +249,7 @@ impl DashboardRenderer {
             .map_err(|e| {
                 IrisError::Render(format!(
                     "failed to communicate with browserless at {}: {e}",
-                    self.config.browserless_url
+                    endpoint
                 ))
             })?;
 
@@ -249,6 +277,9 @@ impl DashboardRenderer {
                 sample = %sample,
                 "Rendered output does not have standard PNG header"
             );
+            return Err(IrisError::Render(format!(
+                "invalid PNG payload from browserless: {sample}"
+            )));
         }
 
         Ok(vec_bytes)
@@ -312,16 +343,32 @@ impl DashboardRenderer {
     await new Promise(r => setTimeout(r, 200));
   }}
 
-  // 3. Ensure no remaining panel loading spinners or cancel buttons exist
+  // 3. Ensure no remaining panel loading spinners, plugin chunks, or cancel buttons exist
   try {{
     await page.waitForFunction(() => {{
       const cancelBtn = Array.from(document.querySelectorAll('button, span')).some(el => el.textContent && el.textContent.includes('Cancel'));
       const spinners = document.querySelectorAll('.panel-loading, [data-testid="panel-loading"], .fa-spinner');
-      return !cancelBtn && spinners.length === 0;
-    }}, {{ timeout: 5000 }});
+      const loadingPlugin = document.body && document.body.innerText && document.body.innerText.includes('Loading plugin panel');
+      return !cancelBtn && spinners.length === 0 && !loadingPlugin;
+    }}, {{ timeout: 8000 }});
   }} catch (e) {{}}
 
-  // 4. Wait for uPlot/canvas drawing to settle
+  // 4. Inject clean kiosk CSS to remove top toolbars, variable submenus, and scrollbars
+  try {{
+    await page.addStyleTag({{
+      content: `
+        header, [data-testid="navbarmenu"], [aria-label="Dashboard submenu"], .submenu-controls,
+        [data-testid="data-testid dashboard controls"], [role="alert"] {{
+          display: none !important;
+        }}
+        ::-webkit-scrollbar {{
+          display: none !important;
+        }}
+      `
+    }});
+  }} catch (e) {{}}
+
+  // 5. Wait for uPlot/canvas drawing to settle
   await new Promise(r => setTimeout(r, 2500));
 
   const buffer = await page.screenshot({{
@@ -409,6 +456,19 @@ impl DashboardRenderer {
     await new Promise(r => setTimeout(r, 200));
   }}
 
+  try {{
+    await page.addStyleTag({{
+      content: `
+        .q-notifications, [role="alert"] {{
+          display: none !important;
+        }}
+        ::-webkit-scrollbar {{
+          display: none !important;
+        }}
+      `
+    }});
+  }} catch (e) {{}}
+
   await new Promise(r => setTimeout(r, 2500));
   const buffer = await page.screenshot({{
     type: 'png',
@@ -425,7 +485,7 @@ impl DashboardRenderer {
             ScreenType::Web => {
                 let trimmed = raw_url.trim();
                 let url = if trimmed.is_empty() {
-                    "https://iris.p.zacharie.org"
+                    "https://iris.zacharie.org"
                 } else {
                     trimmed
                 };
@@ -469,9 +529,11 @@ impl DashboardRenderer {
         };
 
         let mut url = format!("{}{}", self.config.grafana_internal_url, base_path);
-        if !url.contains("kiosk") {
+        if url.contains("kiosk=tv") {
+            url = url.replace("kiosk=tv", "kiosk=1");
+        } else if !url.contains("kiosk") {
             let sep = if url.contains('?') { '&' } else { '?' };
-            url = format!("{url}{sep}kiosk=tv");
+            url = format!("{url}{sep}kiosk=1");
         }
         if !url.contains("theme=") {
             let sep = if url.contains('?') { '&' } else { '?' };
@@ -482,7 +544,7 @@ impl DashboardRenderer {
 
     fn format_internal_openobserve_url(&self, raw: &str) -> String {
         let trimmed = raw.trim();
-        // If raw is just an ID (e.g. numeric "7526637916655718400" or slug)
+        // If raw is just an ID (e.g. numeric "7516898066293608448" or slug)
         if !trimmed.is_empty() && !trimmed.contains('/') {
             return format!(
                 "{}/web/dashboards/view?org_identifier=default&dashboard={}&folder=default&hide_header=true",
@@ -493,14 +555,15 @@ impl DashboardRenderer {
         let base_path = if trimmed.is_empty()
             || trimmed.ends_with("/dashboards")
             || trimmed.ends_with("/dashboards/")
+            || trimmed.contains("k8s-etcd-objects-inventory")
         {
-            "/web/dashboards/view?org_identifier=default&dashboard=7526637916655718400&folder=default"
+            "/web/dashboards/view?org_identifier=default&dashboard=7516898066293608448&folder=default"
         } else if let Some(idx) = trimmed.find("/web/") {
             &trimmed[idx..]
         } else if trimmed.starts_with('/') {
             trimmed
         } else {
-            "/web/dashboards/view?org_identifier=default&dashboard=7526637916655718400&folder=default"
+            "/web/dashboards/view?org_identifier=default&dashboard=7516898066293608448&folder=default"
         };
 
         let mut url = format!("{}{}", self.config.openobserve_internal_url, base_path);
@@ -533,30 +596,42 @@ impl DashboardRenderer {
 
             loop {
                 let snap = controller.snapshot().await;
-                if let Some(screen) = snap.displayed_screen {
-                    if matches!(
-                        screen.screen_type,
-                        ScreenType::Grafana | ScreenType::OpenObserve
-                    ) {
-                        let target_url = if screen.url.trim().is_empty() {
-                            &snap.formatted_url
-                        } else {
-                            &screen.url
-                        };
-                        match renderer
-                            .render_and_cache(&screen.id, screen.screen_type, target_url)
-                            .await
-                        {
-                            Ok(_) => {
-                                debug!(screen = %screen.name, "Background pre-render updated");
-                            }
-                            Err(e) => {
-                                warn!(
-                                    screen = %screen.name,
-                                    error = %e,
-                                    "Background pre-render failed"
-                                );
-                            }
+                let displayed_id = snap.displayed_screen.as_ref().map(|s| s.id.clone());
+
+                let mut targets: Vec<_> = snap
+                    .screens
+                    .into_iter()
+                    .filter(|s| {
+                        s.enabled
+                            && matches!(
+                                s.screen_type,
+                                ScreenType::Grafana | ScreenType::OpenObserve
+                            )
+                    })
+                    .collect();
+
+                // Always prioritize the currently displayed screen first
+                targets.sort_by_key(|s| Some(s.id.clone()) != displayed_id);
+
+                for screen in targets {
+                    let target_url = if screen.url.trim().is_empty() {
+                        &snap.formatted_url
+                    } else {
+                        &screen.url
+                    };
+                    match renderer
+                        .render_and_cache(&screen.id, screen.screen_type, target_url)
+                        .await
+                    {
+                        Ok(_) => {
+                            debug!(screen = %screen.name, "Background pre-render updated");
+                        }
+                        Err(e) => {
+                            warn!(
+                                screen = %screen.name,
+                                error = %e,
+                                "Background pre-render failed"
+                            );
                         }
                     }
                 }
@@ -647,7 +722,7 @@ mod tests {
             "https://grafana.zacharie.org/d/b9b5adf3-6cdb-409d-86ae-0482e25fc165/k8s-dashboard",
         );
         assert!(url.contains("http://grafana-service.grafana.svc:3000/d/b9b5adf3-6cdb-409d-86ae-0482e25fc165/k8s-dashboard"));
-        assert!(url.contains("kiosk=tv"));
+        assert!(url.contains("kiosk=1"));
         assert!(url.contains("theme=dark"));
     }
 

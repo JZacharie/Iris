@@ -195,7 +195,7 @@ impl JsonFileRepository {
                 id: "o2-overview".to_string(),
                 name: "OpenObserve".to_string(),
                 screen_type: ScreenType::OpenObserve,
-                url: "https://o2-openobserve.p.zacharie.org/web/dashboards".to_string(),
+                url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=7516898066293608448&folder=default".to_string(),
                 kiosk_mode: true,
                 auto_refresh_seconds: 60,
                 enabled: true,
@@ -356,7 +356,22 @@ impl StateRepository for JsonFileRepository {
                             || screen.url.trim().ends_with("/d/")
                             || screen.url.trim().ends_with("/d"))
                     {
-                        screen.url = "https://grafana.p.zacharie.org/d/b9b5adf3-6cdb-409d-86ae-0482e25fc165/k8s-dashboard".to_string();
+                        screen.url = "https://grafana.zacharie.org/d/b9b5adf3-6cdb-409d-86ae-0482e25fc165/k8s-dashboard".to_string();
+                    }
+                    if screen.screen_type == ScreenType::OpenObserve
+                        && (screen.url.trim().is_empty()
+                            || screen.url.trim().ends_with("/dashboards")
+                            || screen.url.trim().ends_with("/dashboards/")
+                            || screen.url.contains("k8s-etcd-objects-inventory"))
+                    {
+                        screen.url = "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=7516898066293608448&folder=default".to_string();
+                    } else if screen.screen_type == ScreenType::OpenObserve
+                        && screen.url.contains("dashboard_id=")
+                    {
+                        screen.url = screen.url.replace("dashboard_id=", "dashboard=");
+                        if !screen.url.contains("folder=") {
+                            screen.url.push_str("&folder=default");
+                        }
                     }
                 }
                 if state.deck_buttons.is_empty() {

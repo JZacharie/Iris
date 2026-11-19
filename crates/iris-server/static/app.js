@@ -185,22 +185,25 @@ const GRAFANA_DASHBOARDS = [
   { label: "☸️ K8S Cluster", url: "https://grafana.zacharie.org/d/b9b5adf3-6cdb-409d-86ae-0482e25fc165/k8s-dashboard" },
   { label: "🖥️ Nodes Full", url: "https://grafana.zacharie.org/d/rYdddlPWk/node-exporter-full" },
   { label: "🚀 ArgoCD", url: "https://grafana.zacharie.org/d/qPkgGHg7k/argocd" },
-  { label: "🚨 Alertmanager", url: "https://grafana.zacharie.org/d/eea-9_sik/alertmanager" },
-  { label: "🐝 Cilium", url: "https://grafana.zacharie.org/d/cilium-metrics/cilium-metrics" },
   { label: "🐘 CloudNativePG", url: "https://grafana.zacharie.org/d/cloudnative-pg/cloudnativepg" },
-  { label: "🔀 Traefik", url: "https://grafana.zacharie.org/d/n5bu_kv45/traefik-official-standalone-dashboard" },
-  { label: "🎮 NVIDIA GPU", url: "https://grafana.zacharie.org/d/Oxed_c6Wz2/nvidia-dcgm-exporter-dashboard" },
-  { label: "🛡️ Trivy Security", url: "https://grafana.zacharie.org/d/trivy-security-overview/trivy-security-dashboard" }
+  { label: "🌐 CoreDNS", url: "https://grafana.zacharie.org/d/wY4blRMGz/coredns" },
+  { label: "📡 EMQX MQTT", url: "https://grafana.zacharie.org/d/tjRlQw6Zk/emqx-monitoring" },
+  { label: "🐰 RabbitMQ", url: "https://grafana.zacharie.org/d/Kn5xm-gZk/rabbitmq-overview" },
+  { label: "🔐 Vault", url: "https://grafana.zacharie.org/d/vaults/hashicorp-vault" },
+  { label: "🐝 Cilium", url: "https://grafana.zacharie.org/d/cilium-metrics/cilium-metrics" }
 ];
 
 const OPENOBSERVE_DASHBOARDS = [
-  { label: "⚡ Pylos AI Gateway", id: "7526637916655718400", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=7526637916655718400&folder=default" },
-  { label: "🤖 LLM Consommation", id: "7516513601809571840", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=7516513601809571840&folder=default" },
-  { label: "📊 Consommation Gemini", id: "7516531994134597633", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=7516531994134597633&folder=default" },
   { label: "🔭 Antigravity Complete", id: "7516898066293608448", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=7516898066293608448&folder=default" },
   { label: "📈 Antigravity Metrics", id: "7516898328903180289", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=7516898328903180289&folder=default" },
-  { label: "☸️ ETCD Objects", id: "k8s-etcd-objects-inventory", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=k8s-etcd-objects-inventory&folder=default" },
-  { label: "📨 NATS Messaging", id: "7502190361909927936", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=7502190361909927936&folder=default" }
+  { label: "📊 Consommation Gemini", id: "7516531994134597633", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=7516531994134597633&folder=default" },
+  { label: "🤖 LLM Consommation", id: "7516513601809571840", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=7516513601809571840&folder=default" },
+  { label: "⚡ Pylos AI Gateway", id: "7526637916655718400", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=7526637916655718400&folder=default" },
+  { label: "☸️ K8s Clusters", id: "7502190376086695936", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=7502190376086695936&folder=default" },
+  { label: "📦 K8s Objects", id: "7502190373440069632", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=7502190373440069632&folder=default" },
+  { label: "🏗️ O2 Infra", id: "7502190357904367616", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=7502190357904367616&folder=default" },
+  { label: "📨 NATS Messaging", id: "7502190361909927936", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=7502190361909927936&folder=default" },
+  { label: "🔐 Vault & OpenBao", id: "7502197767322759168", url: "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=7502197767322759168&folder=default" }
 ];
 
 function renderStage(snap) {
@@ -245,38 +248,55 @@ function renderStage(snap) {
       </div>
     `;
 
+    const renderImgEl = document.getElementById("dashboard-render-img");
+    if (renderImgEl) {
+      renderImgEl.onload = () => {
+        renderImgEl.style.opacity = "1";
+        const fb = document.getElementById("btn-force-render-dash");
+        if (fb && fb.disabled) {
+          fb.textContent = "✓ À jour";
+          setTimeout(() => {
+            fb.disabled = false;
+            fb.textContent = "↻ Forcer le rendu";
+          }, 1500);
+        }
+      };
+    }
+
     stage.querySelectorAll(".grafana-preset").forEach((btn) => {
       btn.onclick = async () => {
         const newUrl = btn.dataset.url;
         if (!newUrl) return;
-        lastRenderedKey = null;
         stage.querySelectorAll(".grafana-preset").forEach(b => b.classList.remove("active"));
         btn.classList.add("active");
-        const forceBtn = document.getElementById("btn-force-render-dash");
-        if (forceBtn) {
-          forceBtn.disabled = true;
-          forceBtn.textContent = "⏳ Rendu...";
+        const imgPre = document.getElementById("dashboard-render-img");
+        if (imgPre) imgPre.style.opacity = "0.45";
+        const fbPre = document.getElementById("btn-force-render-dash");
+        if (fbPre) {
+          fbPre.disabled = true;
+          fbPre.textContent = "⏳ Rendu K8s...";
         }
         await api("/api/screens", "POST", {
           ...screen,
           url: newUrl
         });
-        if (forceBtn) {
-          try {
-            await api(`/api/renders/${encodeURIComponent(screen.id)}/refresh`, "POST");
-            const img = document.getElementById("dashboard-render-img");
-            if (img) img.src = `/api/renders/${encodeURIComponent(screen.id)}?t=${Date.now()}`;
-            forceBtn.textContent = "✓ À jour";
+        const fb = document.getElementById("btn-force-render-dash");
+        if (fb) {
+          fb.disabled = true;
+          fb.textContent = "⏳ Rendu K8s...";
+        }
+        try {
+          await api(`/api/renders/${encodeURIComponent(screen.id)}/refresh`, "POST");
+          const img = document.getElementById("dashboard-render-img");
+          if (img) img.src = `/api/renders/${encodeURIComponent(screen.id)}?t=${Date.now()}`;
+        } catch (e) {
+          const fbErr = document.getElementById("btn-force-render-dash");
+          if (fbErr) {
+            fbErr.disabled = false;
+            fbErr.textContent = "⚠️ Erreur";
             setTimeout(() => {
-              forceBtn.disabled = false;
-              forceBtn.textContent = "↻ Forcer le rendu";
-            }, 2000);
-          } catch (e) {
-            forceBtn.disabled = false;
-            forceBtn.textContent = "⚠️ Erreur";
-            setTimeout(() => {
-              forceBtn.disabled = false;
-              forceBtn.textContent = "↻ Forcer le rendu";
+              fbErr.disabled = false;
+              fbErr.textContent = "↻ Forcer le rendu";
             }, 3000);
           }
         }
@@ -287,19 +307,17 @@ function renderStage(snap) {
     if (forceBtn) {
       forceBtn.onclick = async () => {
         forceBtn.disabled = true;
-        forceBtn.textContent = "⏳ Rendu...";
+        forceBtn.textContent = "⏳ Rendu K8s...";
+        const imgPre = document.getElementById("dashboard-render-img");
+        if (imgPre) imgPre.style.opacity = "0.45";
         try {
           await api(`/api/renders/${encodeURIComponent(screen.id)}/refresh`, "POST");
           const img = document.getElementById("dashboard-render-img");
           if (img) img.src = `/api/renders/${encodeURIComponent(screen.id)}?t=${Date.now()}`;
-          forceBtn.textContent = "✓ À jour";
-          setTimeout(() => {
-            forceBtn.disabled = false;
-            forceBtn.textContent = "↻ Forcer le rendu";
-          }, 2000);
         } catch (e) {
           forceBtn.disabled = false;
           forceBtn.textContent = "⚠️ Erreur";
+          if (imgPre) imgPre.style.opacity = "1";
           setTimeout(() => {
             forceBtn.disabled = false;
             forceBtn.textContent = "↻ Forcer le rendu";
@@ -315,12 +333,12 @@ function renderStage(snap) {
   if (screen.type === "OPEN_OBSERVE" || screen.type === "OPENOBSERVE") {
     if (lastRenderedKey === key) return;
     lastRenderedKey = key;
-    const rawUrl = (!screen.url || screen.url.trim().length === 0 || screen.url.endsWith("/dashboards") || screen.url.endsWith("/dashboards/"))
+    const rawUrl = (!screen.url || screen.url.trim().length === 0 || screen.url.endsWith("/dashboards") || screen.url.endsWith("/dashboards/") || screen.url.includes("k8s-etcd-objects-inventory"))
       ? OPENOBSERVE_DASHBOARDS[0].id
       : screen.url;
-    const directUrl = (snap.formattedUrl && !snap.formattedUrl.endsWith("/dashboards") && !snap.formattedUrl.endsWith("/dashboards/"))
+    const directUrl = (snap.formattedUrl && !snap.formattedUrl.endsWith("/dashboards") && !snap.formattedUrl.endsWith("/dashboards/") && !snap.formattedUrl.includes("k8s-etcd-objects-inventory"))
       ? snap.formattedUrl
-      : (screen.url && screen.url.startsWith("http") && !screen.url.endsWith("/dashboards") && !screen.url.endsWith("/dashboards/"))
+      : (screen.url && screen.url.startsWith("http") && !screen.url.endsWith("/dashboards") && !screen.url.endsWith("/dashboards/") && !screen.url.includes("k8s-etcd-objects-inventory"))
       ? screen.url
       : OPENOBSERVE_DASHBOARDS[0].url;
     const renderImgUrl = `/api/renders/${encodeURIComponent(screen.id)}?t=${Date.now()}`;
@@ -346,38 +364,55 @@ function renderStage(snap) {
       </div>
     `;
 
+    const renderImgEl = document.getElementById("dashboard-render-img");
+    if (renderImgEl) {
+      renderImgEl.onload = () => {
+        renderImgEl.style.opacity = "1";
+        const fb = document.getElementById("btn-force-render-dash");
+        if (fb && fb.disabled) {
+          fb.textContent = "✓ À jour";
+          setTimeout(() => {
+            fb.disabled = false;
+            fb.textContent = "↻ Forcer le rendu";
+          }, 1500);
+        }
+      };
+    }
+
     stage.querySelectorAll(".openobserve-preset").forEach((btn) => {
       btn.onclick = async () => {
         const newUrl = btn.dataset.url;
         if (!newUrl) return;
-        lastRenderedKey = null;
         stage.querySelectorAll(".openobserve-preset").forEach(b => b.classList.remove("active"));
         btn.classList.add("active");
-        const forceBtn = document.getElementById("btn-force-render-dash");
-        if (forceBtn) {
-          forceBtn.disabled = true;
-          forceBtn.textContent = "⏳ Rendu...";
+        const imgPre = document.getElementById("dashboard-render-img");
+        if (imgPre) imgPre.style.opacity = "0.45";
+        const fbPre = document.getElementById("btn-force-render-dash");
+        if (fbPre) {
+          fbPre.disabled = true;
+          fbPre.textContent = "⏳ Rendu K8s...";
         }
         await api("/api/screens", "POST", {
           ...screen,
           url: newUrl
         });
-        if (forceBtn) {
-          try {
-            await api(`/api/renders/${encodeURIComponent(screen.id)}/refresh`, "POST");
-            const img = document.getElementById("dashboard-render-img");
-            if (img) img.src = `/api/renders/${encodeURIComponent(screen.id)}?t=${Date.now()}`;
-            forceBtn.textContent = "✓ À jour";
+        const fb = document.getElementById("btn-force-render-dash");
+        if (fb) {
+          fb.disabled = true;
+          fb.textContent = "⏳ Rendu K8s...";
+        }
+        try {
+          await api(`/api/renders/${encodeURIComponent(screen.id)}/refresh`, "POST");
+          const img = document.getElementById("dashboard-render-img");
+          if (img) img.src = `/api/renders/${encodeURIComponent(screen.id)}?t=${Date.now()}`;
+        } catch (e) {
+          const fbErr = document.getElementById("btn-force-render-dash");
+          if (fbErr) {
+            fbErr.disabled = false;
+            fbErr.textContent = "⚠️ Erreur";
             setTimeout(() => {
-              forceBtn.disabled = false;
-              forceBtn.textContent = "↻ Forcer le rendu";
-            }, 2000);
-          } catch (e) {
-            forceBtn.disabled = false;
-            forceBtn.textContent = "⚠️ Erreur";
-            setTimeout(() => {
-              forceBtn.disabled = false;
-              forceBtn.textContent = "↻ Forcer le rendu";
+              fbErr.disabled = false;
+              fbErr.textContent = "↻ Forcer le rendu";
             }, 3000);
           }
         }
@@ -388,19 +423,17 @@ function renderStage(snap) {
     if (forceBtn) {
       forceBtn.onclick = async () => {
         forceBtn.disabled = true;
-        forceBtn.textContent = "⏳ Rendu...";
+        forceBtn.textContent = "⏳ Rendu K8s...";
+        const imgPre = document.getElementById("dashboard-render-img");
+        if (imgPre) imgPre.style.opacity = "0.45";
         try {
           await api(`/api/renders/${encodeURIComponent(screen.id)}/refresh`, "POST");
           const img = document.getElementById("dashboard-render-img");
           if (img) img.src = `/api/renders/${encodeURIComponent(screen.id)}?t=${Date.now()}`;
-          forceBtn.textContent = "✓ À jour";
-          setTimeout(() => {
-            forceBtn.disabled = false;
-            forceBtn.textContent = "↻ Forcer le rendu";
-          }, 2000);
         } catch (e) {
           forceBtn.disabled = false;
           forceBtn.textContent = "⚠️ Erreur";
+          if (imgPre) imgPre.style.opacity = "1";
           setTimeout(() => {
             forceBtn.disabled = false;
             forceBtn.textContent = "↻ Forcer le rendu";
