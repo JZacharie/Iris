@@ -395,20 +395,23 @@ impl DashboardRenderer {
   let o2QueriesFired = 0;
 
   page.on('request', req => {{
-    if (req.url().includes('/api/default/')) {{
+    const u = req.url();
+    if (u.includes('_search') || u.includes('/prometheus/api/v1/')) {{
       pendingO2Queries++;
       o2QueriesFired++;
     }}
   }});
 
   page.on('requestfinished', req => {{
-    if (req.url().includes('/api/default/')) {{
+    const u = req.url();
+    if (u.includes('_search') || u.includes('/prometheus/api/v1/')) {{
       pendingO2Queries = Math.max(0, pendingO2Queries - 1);
     }}
   }});
 
   page.on('requestfailed', req => {{
-    if (req.url().includes('/api/default/')) {{
+    const u = req.url();
+    if (u.includes('_search') || u.includes('/prometheus/api/v1/')) {{
       pendingO2Queries = Math.max(0, pendingO2Queries - 1);
     }}
   }});
@@ -444,21 +447,42 @@ impl DashboardRenderer {
     window.location.href = url;
   }}, '{internal_url}');
 
-  // Wait up to 5s for queries to start
-  for (let i = 0; i < 50; i++) {{
+  // 1. Wait up to 10s for _search_stream or prometheus queries to start
+  for (let i = 0; i < 100; i++) {{
     if (o2QueriesFired > 0) break;
     await new Promise(r => setTimeout(r, 100));
   }}
 
-  // Wait up to 20s for queries to finish
-  for (let i = 0; i < 100; i++) {{
+  // 2. Wait up to 25s for all _search_stream / prometheus queries to finish
+  for (let i = 0; i < 125; i++) {{
     if (o2QueriesFired > 0 && pendingO2Queries === 0) break;
     await new Promise(r => setTimeout(r, 200));
   }}
 
+  // 3. Switch to Dark Mode via [data-test="navbar-theme-toggle-btn"]
+  try {{
+    await page.evaluate(() => {{
+      const html = document.documentElement;
+      const isDark = html.classList.contains('dark') || document.body.classList.contains('body--dark') || document.body.classList.contains('dark');
+      if (!isDark) {{
+        const themeBtn = document.querySelector('[data-test="navbar-theme-toggle-btn"]');
+        if (themeBtn) themeBtn.click();
+      }}
+    }});
+  }} catch (e) {{}}
+
+  // 4. Hide top bar, left nav, edit buttons, and variable filter bars for a pure kiosk layout
   try {{
     await page.addStyleTag({{
       content: `
+        header, nav, [data-test="navbar-main-nav"],
+        [data-test="header-openobserve-logo"], [data-test="upgrade-to-enterprise-btn"],
+        [data-test="dashboard-back-btn"], [data-test="dashboard-panel-add"],
+        [data-test="export-dashboard"], [data-test="dashboard-share-btn"],
+        [data-test="dashboard-setting-btn"], [data-test="dashboard-print-btn"],
+        [data-test="dashboard-fullscreen-btn"], [data-test="view-dashboard-scheduled-reports"],
+        [data-test="dashboard-json-edit-btn"], [data-test="dashboard-view-set-home-btn"],
+        [data-test="dashboard-tab-add-btn"], [data-test="global-variables-selector"],
         .q-notifications, [role="alert"] {{
           display: none !important;
         }}
@@ -469,7 +493,7 @@ impl DashboardRenderer {
     }});
   }} catch (e) {{}}
 
-  await new Promise(r => setTimeout(r, 2500));
+  await new Promise(r => setTimeout(r, 2000));
   const buffer = await page.screenshot({{
     type: 'png',
     fullPage: false
