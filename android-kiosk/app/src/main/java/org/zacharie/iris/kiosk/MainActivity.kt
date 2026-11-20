@@ -41,7 +41,9 @@ class MainActivity : Activity() {
             settings.domStorageEnabled = true
             settings.useWideViewPort = true
             settings.loadWithOverviewMode = true
+            settings.cacheMode = WebSettings.LOAD_NO_CACHE
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+            clearCache(true)
             webViewClient = object : WebViewClient() {
                 override fun onReceivedError(
                     view: WebView?,

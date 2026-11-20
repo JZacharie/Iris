@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use iris_core::{IrisError, Result, ScreenType};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, Semaphore};
 use tracing::{debug, info, warn};
 
 const DEFAULT_BROWSERLESS_URL: &str = "http://browserless-chrome.browserless-chrome.svc/function";
@@ -40,8 +40,8 @@ impl Default for DashboardRendererConfig {
             openobserve_internal_url: DEFAULT_OPENOBSERVE_INTERNAL_URL.to_string(),
             openobserve_email: DEFAULT_OPENOBSERVE_EMAIL.to_string(),
             openobserve_password: DEFAULT_OPENOBSERVE_PASSWORD.to_string(),
-            viewport_width: 1920,
-            viewport_height: 1080,
+            viewport_width: 1528,
+            viewport_height: 1122,
             timeout_seconds: 60,
         }
     }
@@ -99,6 +99,8 @@ pub struct RenderCacheEntry {
     pub rendered_at: DateTime<Utc>,
     pub duration_ms: u64,
     pub target_url: String,
+    pub width: u32,
+    pub height: u32,
 }
 
 pub struct DashboardRenderer {
@@ -106,6 +108,7 @@ pub struct DashboardRenderer {
     http: reqwest::Client,
     cache: Arc<RwLock<HashMap<String, RenderCacheEntry>>>,
     in_flight: Arc<Mutex<HashSet<String>>>,
+    semaphore: Arc<Semaphore>,
 }
 
 impl DashboardRenderer {
@@ -119,6 +122,7 @@ impl DashboardRenderer {
             http,
             cache: Arc::new(RwLock::new(HashMap::new())),
             in_flight: Arc::new(Mutex::new(HashSet::new())),
+            semaphore: Arc::new(Semaphore::new(2)),
         }
     }
 
@@ -130,9 +134,31 @@ impl DashboardRenderer {
         &self.config
     }
 
+    pub fn normalize_dimensions(&self, w: Option<u32>, h: Option<u32>) -> (u32, u32) {
+        let width = w.unwrap_or(self.config.viewport_width).clamp(640, 3840);
+        let height = h.unwrap_or(self.config.viewport_height).clamp(480, 2160);
+        (width, height)
+    }
+
+    fn cache_key(screen_id: &str, width: u32, height: u32) -> String {
+        format!("{screen_id}@{width}x{height}")
+    }
+
     pub async fn get_cached(&self, screen_id: &str) -> Option<RenderCacheEntry> {
         let lock = self.cache.read().await;
-        lock.get(screen_id).cloned()
+        let default_key = Self::cache_key(
+            screen_id,
+            self.config.viewport_width,
+            self.config.viewport_height,
+        );
+        if let Some(entry) = lock.get(&default_key) {
+            return Some(entry.clone());
+        }
+        let prefix = format!("{screen_id}@");
+        lock.iter()
+            .filter(|(k, _)| k.starts_with(&prefix) || *k == screen_id)
+            .max_by_key(|(_, v)| v.rendered_at)
+            .map(|(_, v)| v.clone())
     }
 
     pub async fn get_cached_for_url(
@@ -140,13 +166,35 @@ impl DashboardRenderer {
         screen_id: &str,
         expected_url: &str,
     ) -> Option<RenderCacheEntry> {
+        self.get_cached_for_url_and_size(screen_id, expected_url, None, None)
+            .await
+    }
+
+    pub async fn get_cached_for_url_and_size(
+        &self,
+        screen_id: &str,
+        expected_url: &str,
+        w: Option<u32>,
+        h: Option<u32>,
+    ) -> Option<RenderCacheEntry> {
+        let (width, height) = self.normalize_dimensions(w, h);
+        let key = Self::cache_key(screen_id, width, height);
         let lock = self.cache.read().await;
-        let entry = lock.get(screen_id)?;
-        if expected_url.trim().is_empty() || entry.target_url == expected_url.trim() {
-            Some(entry.clone())
-        } else {
-            None
+        if let Some(entry) = lock.get(&key) {
+            if expected_url.trim().is_empty() || entry.target_url == expected_url.trim() {
+                return Some(entry.clone());
+            }
         }
+        // Fallback: if exact dimensions aren't rendered yet, check if we have any entry for this screen + URL
+        let prefix = format!("{screen_id}@");
+        lock.iter()
+            .filter(|(k, v)| {
+                (k.starts_with(&prefix) || *k == screen_id)
+                    && (expected_url.trim().is_empty() || v.target_url == expected_url.trim())
+            })
+            .max_by_key(|(_, v)| v.rendered_at)
+            .map(|(_, v)| v.clone())
+            .filter(|entry| entry.width == width && entry.height == height)
     }
 
     pub async fn render_and_cache(
@@ -155,8 +203,22 @@ impl DashboardRenderer {
         screen_type: ScreenType,
         target_url: &str,
     ) -> Result<RenderCacheEntry> {
+        self.render_and_cache_sized(screen_id, screen_type, target_url, None, None)
+            .await
+    }
+
+    pub async fn render_and_cache_sized(
+        &self,
+        screen_id: &str,
+        screen_type: ScreenType,
+        target_url: &str,
+        w: Option<u32>,
+        h: Option<u32>,
+    ) -> Result<RenderCacheEntry> {
+        let (width, height) = self.normalize_dimensions(w, h);
         let normalized_target = target_url.trim().to_string();
-        let flight_key = format!("{screen_id}|{normalized_target}");
+        let cache_key = Self::cache_key(screen_id, width, height);
+        let flight_key = format!("{cache_key}|{normalized_target}");
 
         // Single-flight deduplication: prevent duplicate concurrent renders for the same screen+url
         loop {
@@ -176,7 +238,15 @@ impl DashboardRenderer {
 
             // A render for this exact screen+url is already running, await it
             tokio::time::sleep(Duration::from_millis(500)).await;
-            if let Some(cached) = self.get_cached_for_url(screen_id, &normalized_target).await {
+            if let Some(cached) = self
+                .get_cached_for_url_and_size(
+                    screen_id,
+                    &normalized_target,
+                    Some(width),
+                    Some(height),
+                )
+                .await
+            {
                 if (Utc::now() - cached.rendered_at).num_seconds() < 15 {
                     return Ok(cached);
                 }
@@ -188,10 +258,16 @@ impl DashboardRenderer {
             screen_id = %screen_id,
             screen_type = ?screen_type,
             url = %normalized_target,
+            width = width,
+            height = height,
             "Starting dashboard pre-render via browserless-chrome"
         );
 
-        let render_res = self.render_screen(screen_type, &normalized_target).await;
+        let render_res = {
+            let _permit = self.semaphore.acquire().await;
+            self.render_screen_sized(screen_type, &normalized_target, width, height)
+                .await
+        };
 
         // Release in-flight flag
         {
@@ -206,15 +282,19 @@ impl DashboardRenderer {
             rendered_at: Utc::now(),
             duration_ms,
             target_url: normalized_target,
+            width,
+            height,
         };
 
         {
             let mut lock = self.cache.write().await;
-            lock.insert(screen_id.to_string(), entry.clone());
+            lock.insert(cache_key, entry.clone());
         }
 
         info!(
             screen_id = %screen_id,
+            width = width,
+            height = height,
             duration_ms = duration_ms,
             bytes = entry.image_png.len(),
             "Dashboard pre-render completed and cached successfully"
@@ -223,7 +303,23 @@ impl DashboardRenderer {
     }
 
     pub async fn render_screen(&self, screen_type: ScreenType, raw_url: &str) -> Result<Vec<u8>> {
-        let script = self.build_puppeteer_script(screen_type, raw_url)?;
+        self.render_screen_sized(
+            screen_type,
+            raw_url,
+            self.config.viewport_width,
+            self.config.viewport_height,
+        )
+        .await
+    }
+
+    pub async fn render_screen_sized(
+        &self,
+        screen_type: ScreenType,
+        raw_url: &str,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<u8>> {
+        let script = self.build_puppeteer_script(screen_type, raw_url, width, height)?;
         let endpoint = if self.config.browserless_url.contains("timeout=") {
             self.config.browserless_url.clone()
         } else {
@@ -285,10 +381,13 @@ impl DashboardRenderer {
         Ok(vec_bytes)
     }
 
-    fn build_puppeteer_script(&self, screen_type: ScreenType, raw_url: &str) -> Result<String> {
-        let width = self.config.viewport_width;
-        let height = self.config.viewport_height;
-
+    fn build_puppeteer_script(
+        &self,
+        screen_type: ScreenType,
+        raw_url: &str,
+        width: u32,
+        height: u32,
+    ) -> Result<String> {
         match screen_type {
             ScreenType::Grafana => {
                 let internal_url = self.format_internal_grafana_url(raw_url);
@@ -643,19 +742,39 @@ impl DashboardRenderer {
                     } else {
                         &screen.url
                     };
-                    match renderer
-                        .render_and_cache(&screen.id, screen.screen_type, target_url)
-                        .await
-                    {
-                        Ok(_) => {
-                            debug!(screen = %screen.name, "Background pre-render updated");
-                        }
-                        Err(e) => {
-                            warn!(
-                                screen = %screen.name,
-                                error = %e,
-                                "Background pre-render failed"
-                            );
+                    // Pre-render the tablet's 3 exact stage resolutions:
+                    // 1. With expanded sidebar (1528x1122)
+                    // 2. With collapsed sidebar (1710x1122)
+                    // 3. Without sidebar / full kiosk (1776x1122)
+                    let presets: [(u32, u32); 3] = [(1528, 1122), (1776, 1122), (1710, 1122)];
+                    for (pw, ph) in presets {
+                        match renderer
+                            .render_and_cache_sized(
+                                &screen.id,
+                                screen.screen_type,
+                                target_url,
+                                Some(pw),
+                                Some(ph),
+                            )
+                            .await
+                        {
+                            Ok(_) => {
+                                debug!(
+                                    screen = %screen.name,
+                                    width = pw,
+                                    height = ph,
+                                    "Background pre-render updated"
+                                );
+                            }
+                            Err(e) => {
+                                warn!(
+                                    screen = %screen.name,
+                                    width = pw,
+                                    height = ph,
+                                    error = %e,
+                                    "Background pre-render failed"
+                                );
+                            }
                         }
                     }
                 }

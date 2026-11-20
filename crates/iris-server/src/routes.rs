@@ -756,10 +756,12 @@ async fn handle_ws(mut socket: WebSocket, state: AppState) {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct RenderQuery {
     #[serde(default)]
     force: bool,
+    w: Option<u32>,
+    h: Option<u32>,
 }
 
 async fn get_screen_render(
@@ -816,7 +818,11 @@ async fn get_screen_render(
     };
 
     if !query.force {
-        if let Some(entry) = state.renderer.get_cached_for_url(&id, target_url).await {
+        if let Some(entry) = state
+            .renderer
+            .get_cached_for_url_and_size(&id, target_url, query.w, query.h)
+            .await
+        {
             let rendered_at_str = entry.rendered_at.to_rfc3339();
             return (
                 StatusCode::OK,
@@ -836,7 +842,7 @@ async fn get_screen_render(
 
     match state
         .renderer
-        .render_and_cache(&screen.id, screen.screen_type, target_url)
+        .render_and_cache_sized(&screen.id, screen.screen_type, target_url, query.w, query.h)
         .await
     {
         Ok(entry) => {
@@ -857,10 +863,29 @@ async fn get_screen_render(
         }
         Err(err) => {
             tracing::error!(screen = %screen.name, error = %err, "Failed to render screen");
+            if let Some(stale) = state.renderer.get_cached(&screen.id).await {
+                let rendered_at_str = stale.rendered_at.to_rfc3339();
+                return (
+                    StatusCode::OK,
+                    [
+                        (header::CONTENT_TYPE, "image/png"),
+                        (header::CACHE_CONTROL, "no-store"),
+                        (
+                            header::HeaderName::from_static("x-iris-rendered-at"),
+                            rendered_at_str.as_str(),
+                        ),
+                    ],
+                    stale.image_png,
+                )
+                    .into_response();
+            }
             let svg = DashboardRenderer::generate_fallback_svg(&screen.name, &err.to_string());
             (
-                StatusCode::SERVICE_UNAVAILABLE,
-                [(header::CONTENT_TYPE, "image/svg+xml")],
+                StatusCode::OK,
+                [
+                    (header::CONTENT_TYPE, "image/svg+xml"),
+                    (header::CACHE_CONTROL, "no-store"),
+                ],
                 svg,
             )
                 .into_response()
@@ -871,6 +896,7 @@ async fn get_screen_render(
 async fn refresh_screen_render(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<RenderQuery>,
 ) -> impl IntoResponse {
     let snap = state.controller.snapshot().await;
     let screen = snap.screens.iter().find(|s| s.id == id).cloned().or_else(|| {
@@ -890,7 +916,7 @@ async fn refresh_screen_render(
                 id: id.clone(),
                 name: "OpenObserve".to_string(),
                 screen_type: ScreenType::OpenObserve,
-                url: "7526637916655718400".to_string(),
+                url: "7516898066293608448".to_string(),
                 kiosk_mode: true,
                 auto_refresh_seconds: 60,
                 enabled: true,
@@ -920,7 +946,7 @@ async fn refresh_screen_render(
 
     match state
         .renderer
-        .render_and_cache(&screen.id, screen.screen_type, target_url)
+        .render_and_cache_sized(&screen.id, screen.screen_type, target_url, query.w, query.h)
         .await
     {
         Ok(entry) => (
@@ -928,6 +954,8 @@ async fn refresh_screen_render(
             Json(serde_json::json!({
                 "status": "ok",
                 "screen_id": screen.id,
+                "width": entry.width,
+                "height": entry.height,
                 "rendered_at": entry.rendered_at.to_rfc3339(),
                 "duration_ms": entry.duration_ms,
                 "bytes": entry.image_png.len(),

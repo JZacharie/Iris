@@ -3,13 +3,65 @@ let lastRenderedKey = null;
 let clockTimer = null;
 let dashboardAutoRefreshTimer = null;
 
+function getRenderViewportSize() {
+  const hud = document.getElementById("hud");
+  let sidebarWidth = 248;
+  if (hud) {
+    if (hud.classList.contains("hidden")) {
+      sidebarWidth = 0;
+    } else if (hud.classList.contains("collapsed")) {
+      sidebarWidth = 66;
+    } else {
+      sidebarWidth = Math.round(hud.getBoundingClientRect().width) || 248;
+    }
+  }
+  const winW = Math.round(window.innerWidth || 1776);
+  const winH = Math.round(window.innerHeight || 1166);
+  // Snap common tablet widths (1528, 1710, 1776) and height (1122) to exact pre-rendered presets
+  const rawW = Math.max(640, winW - sidebarWidth);
+  const rawH = Math.max(480, winH - 44);
+  let w = rawW;
+  if (Math.abs(rawW - 1528) <= 12) w = 1528;
+  else if (Math.abs(rawW - 1710) <= 12) w = 1710;
+  else if (Math.abs(rawW - 1776) <= 12) w = 1776;
+  let h = rawH;
+  if (Math.abs(rawH - 1122) <= 16) h = 1122;
+  return { w, h };
+}
+
+function buildRenderImgUrl(screenId, bustCache = true) {
+  const { w, h } = getRenderViewportSize();
+  const base = `/api/renders/${encodeURIComponent(screenId)}?w=${w}&h=${h}`;
+  return bustCache ? `${base}&t=${Date.now()}` : base;
+}
+
+function buildRenderRefreshUrl(screenId) {
+  const { w, h } = getRenderViewportSize();
+  return `/api/renders/${encodeURIComponent(screenId)}/refresh?w=${w}&h=${h}`;
+}
+
+function updateDashboardRenderResolution() {
+  if (!currentSnapshot || !currentSnapshot.displayedScreen) return;
+  const s = currentSnapshot.displayedScreen;
+  if (s.type !== "GRAFANA" && s.type !== "OPEN_OBSERVE" && s.type !== "OPENOBSERVE") return;
+  const img = document.getElementById("dashboard-render-img");
+  const badge = document.getElementById("dashboard-render-res-badge");
+  const { w, h } = getRenderViewportSize();
+  if (badge) {
+    badge.textContent = `⚡ K8s ${w}×${h}`;
+  }
+  if (img) {
+    img.src = buildRenderImgUrl(s.id, true);
+  }
+}
+
 function startDashboardAutoRefresh(screenId, refreshSeconds) {
   stopDashboardAutoRefresh();
   const intervalMs = Math.max(15, (refreshSeconds || 60)) * 1000;
   dashboardAutoRefreshTimer = setInterval(() => {
     const img = document.getElementById("dashboard-render-img");
     if (img) {
-      img.src = `/api/renders/${encodeURIComponent(screenId)}?t=${Date.now()}`;
+      img.src = buildRenderImgUrl(screenId, true);
     }
   }, intervalMs);
 }
@@ -225,7 +277,8 @@ function renderStage(snap) {
     const directUrl = (!snap.formattedUrl || snap.formattedUrl.includes("/d/?"))
       ? `${GRAFANA_DASHBOARDS[0].url}?kiosk=tv&theme=dark&refresh=30s`
       : snap.formattedUrl;
-    const renderImgUrl = `/api/renders/${encodeURIComponent(screen.id)}?t=${Date.now()}`;
+    const renderImgUrl = buildRenderImgUrl(screen.id, true);
+    const { w: initW, h: initH } = getRenderViewportSize();
 
     stage.innerHTML = `
       <div class="dashboard-wrap">
@@ -238,7 +291,7 @@ function renderStage(snap) {
           </div>
           <div class="row" style="gap:8px;flex-shrink:0;">
             <button class="btn btn-force-render" id="btn-force-render-dash" style="font-size:12px;padding:5px 10px;">↻ Forcer le rendu</button>
-            <span class="render-badge">⚡ Pré-rendu K8s</span>
+            <span class="render-badge" id="dashboard-render-res-badge">⚡ K8s ${initW}×${initH}</span>
             <a class="btn" href="${escapeHtml(directUrl)}" target="_blank" rel="noopener" style="text-decoration:none;white-space:nowrap;font-size:12px;padding:5px 10px;">↗ Ouvrir en direct</a>
           </div>
         </div>
@@ -286,9 +339,9 @@ function renderStage(snap) {
           fb.textContent = "⏳ Rendu K8s...";
         }
         try {
-          await api(`/api/renders/${encodeURIComponent(screen.id)}/refresh`, "POST");
+          await api(buildRenderRefreshUrl(screen.id), "POST");
           const img = document.getElementById("dashboard-render-img");
-          if (img) img.src = `/api/renders/${encodeURIComponent(screen.id)}?t=${Date.now()}`;
+          if (img) img.src = buildRenderImgUrl(screen.id, true);
         } catch (e) {
           const fbErr = document.getElementById("btn-force-render-dash");
           if (fbErr) {
@@ -311,9 +364,9 @@ function renderStage(snap) {
         const imgPre = document.getElementById("dashboard-render-img");
         if (imgPre) imgPre.style.opacity = "0.45";
         try {
-          await api(`/api/renders/${encodeURIComponent(screen.id)}/refresh`, "POST");
+          await api(buildRenderRefreshUrl(screen.id), "POST");
           const img = document.getElementById("dashboard-render-img");
-          if (img) img.src = `/api/renders/${encodeURIComponent(screen.id)}?t=${Date.now()}`;
+          if (img) img.src = buildRenderImgUrl(screen.id, true);
         } catch (e) {
           forceBtn.disabled = false;
           forceBtn.textContent = "⚠️ Erreur";
@@ -341,7 +394,8 @@ function renderStage(snap) {
       : (screen.url && screen.url.startsWith("http") && !screen.url.endsWith("/dashboards") && !screen.url.endsWith("/dashboards/") && !screen.url.includes("k8s-etcd-objects-inventory"))
       ? screen.url
       : OPENOBSERVE_DASHBOARDS[0].url;
-    const renderImgUrl = `/api/renders/${encodeURIComponent(screen.id)}?t=${Date.now()}`;
+    const renderImgUrl = buildRenderImgUrl(screen.id, true);
+    const { w: initW, h: initH } = getRenderViewportSize();
 
     stage.innerHTML = `
       <div class="dashboard-wrap">
@@ -354,7 +408,7 @@ function renderStage(snap) {
           </div>
           <div class="row" style="gap:8px;flex-shrink:0;">
             <button class="btn btn-force-render" id="btn-force-render-dash" style="font-size:12px;padding:5px 10px;">↻ Forcer le rendu</button>
-            <span class="render-badge">⚡ Pré-rendu K8s</span>
+            <span class="render-badge" id="dashboard-render-res-badge">⚡ K8s ${initW}×${initH}</span>
             <a class="btn" href="${escapeHtml(directUrl)}" target="_blank" rel="noopener" style="text-decoration:none;white-space:nowrap;font-size:12px;padding:5px 10px;">↗ Ouvrir en direct</a>
           </div>
         </div>
@@ -402,9 +456,9 @@ function renderStage(snap) {
           fb.textContent = "⏳ Rendu K8s...";
         }
         try {
-          await api(`/api/renders/${encodeURIComponent(screen.id)}/refresh`, "POST");
+          await api(buildRenderRefreshUrl(screen.id), "POST");
           const img = document.getElementById("dashboard-render-img");
-          if (img) img.src = `/api/renders/${encodeURIComponent(screen.id)}?t=${Date.now()}`;
+          if (img) img.src = buildRenderImgUrl(screen.id, true);
         } catch (e) {
           const fbErr = document.getElementById("btn-force-render-dash");
           if (fbErr) {
@@ -427,9 +481,9 @@ function renderStage(snap) {
         const imgPre = document.getElementById("dashboard-render-img");
         if (imgPre) imgPre.style.opacity = "0.45";
         try {
-          await api(`/api/renders/${encodeURIComponent(screen.id)}/refresh`, "POST");
+          await api(buildRenderRefreshUrl(screen.id), "POST");
           const img = document.getElementById("dashboard-render-img");
-          if (img) img.src = `/api/renders/${encodeURIComponent(screen.id)}?t=${Date.now()}`;
+          if (img) img.src = buildRenderImgUrl(screen.id, true);
         } catch (e) {
           forceBtn.disabled = false;
           forceBtn.textContent = "⚠️ Erreur";
@@ -2072,10 +2126,12 @@ document.getElementById("btn-alert-clear").onclick = () => api("/api/alert/clear
 document.getElementById("btn-hide-hud").onclick = () => {
   document.getElementById("hud").classList.add("hidden");
   document.getElementById("btn-show-hud").classList.add("visible");
+  updateDashboardRenderResolution();
 };
 document.getElementById("btn-show-hud").onclick = () => {
   document.getElementById("hud").classList.remove("hidden");
   document.getElementById("btn-show-hud").classList.remove("visible");
+  updateDashboardRenderResolution();
 };
 const collapseBtn = document.getElementById("btn-collapse-sidebar");
 if (collapseBtn) {
@@ -2088,8 +2144,15 @@ if (collapseBtn) {
     const isCollapsed = hud.classList.toggle("collapsed");
     collapseBtn.textContent = isCollapsed ? "▶" : "◀";
     localStorage.setItem("iris_sidebar_collapsed", isCollapsed ? "1" : "0");
+    setTimeout(updateDashboardRenderResolution, 240);
   };
 }
+
+let resizeRenderTimer = null;
+window.addEventListener("resize", () => {
+  if (resizeRenderTimer) clearTimeout(resizeRenderTimer);
+  resizeRenderTimer = setTimeout(updateDashboardRenderResolution, 350);
+});
 
 document.getElementById("btn-screens").onclick = () => {
   if (!currentSnapshot) return;
