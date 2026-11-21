@@ -16,7 +16,7 @@ pub enum ScreenType {
     OrgHome,
     OrgNews,
     OrgAgents,
-    #[serde(alias = "ORG_3D_PRINT")]
+    #[serde(rename = "ORG_3D_PRINT", alias = "ORG3_D_PRINT")]
     Org3DPrint,
 }
 

@@ -551,12 +551,15 @@ function renderStage(snap) {
   else if (screen.type === "ORG_HOME") renderOrgHome(stage, snap);
   else if (screen.type === "ORG_LIFE_INFRA") renderLifeInfra(stage, snap);
   else if (screen.type === "ORG_AGENTS") renderOrgAgents(stage, snap);
-  else if (screen.type === "ORG_3D_PRINT") renderOrg3DPrint(stage, snap);
+  else if (screen.type === "ORG_3D_PRINT" || screen.type === "ORG3_D_PRINT") renderOrg3DPrint(stage, snap);
   else if (screen.type === "ORG_NEWS") renderOrgNews(stage, snap);
   else if (screen.type === "ORG_STREAM_DECK") renderStreamDeck(stage, snap);
   else if (screen.type === "ORG_AGENDA") renderOrgAgenda(stage, snap);
   else if (screen.type === "ORG_NOTES") renderOrgNotes(stage, snap);
   else if (screen.type === "ORG_CLOCK") renderOrgClock(stage);
+  else {
+    stage.innerHTML = `<div class="org-view"><h2>Écran non reconnu : ${escapeHtml(screen.name || screen.id)} (${escapeHtml(screen.type)})</h2></div>`;
+  }
 }
 
 let activeAgentsFilter = "ALL";
