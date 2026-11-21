@@ -1,0 +1,60 @@
+name: "05 · Android — Build APK & GitHub Release"
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.2.0)"
+        required: true
+        default: "v0.2.0"
+
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    name: Build Iris Android APK
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build Release APK
+        working-directory: android-kiosk
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+
+      - name: Prepare APK artifacts
+        run: |
+          TAG="${{ github.ref_name }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          fi
+          mkdir -p release-assets
+          cp android-kiosk/app/build/outputs/apk/release/app-release.apk "release-assets/iris-android-${TAG}.apk"
+          cp android-kiosk/app/build/outputs/apk/release/app-release.apk "release-assets/iris-android-latest.apk"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          name: "Iris Android ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          body: |
+            Application Android **Iris** (téléphone & tablette, mode adaptatif + assistant vocal Meishi + Kusanagi + Domotique + Impression 3D).
+            - URL serveur par défaut : `https://iris.zacharie.org` (modifiable via le bouton `⚙` en bas à droite).
+            - Installez `iris-android-latest.apk` directement sur votre téléphone Android.
+          files: |
+            release-assets/iris-android-*.apk
+          generate_release_notes: true

@@ -467,6 +467,23 @@
       border: 1px solid var(--border); border-radius: 16px; padding: 16px;
       display: flex; flex-direction: column; justify-content: space-between; gap: 10px;
     }
+    @media (max-width: 768px) {
+      .sidebar { width: 56px; min-width: 56px; }
+      .sidebar .brand-text,
+      .sidebar .nav-section-title,
+      .sidebar .nav-text,
+      .sidebar .nav-badge,
+      .sidebar #mqtt-label,
+      .sidebar .barthes-label-text { display: none; }
+      .sidebar .sidebar-header { justify-content: center; padding: 10px 4px; }
+      .sidebar .brand-wrap { display: none; }
+      .sidebar .nav-item { justify-content: center; padding: 10px 4px; }
+      .sidebar .mqtt-badge,
+      .sidebar .barthes-pill { justify-content: center; padding: 6px; }
+      .org-view { padding: 12px; }
+      .kpi-grid-4, .grid-2, .deck-telemetry, .week-grid { grid-template-columns: 1fr !important; }
+      .meishi-mic-btn { width: 54px; height: 54px; bottom: 16px; right: 16px; font-size: 24px; }
+    }
   </style>
 </head>
 <body>
