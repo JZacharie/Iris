@@ -1011,7 +1011,7 @@ async fn get_screen_render(
     if !query.force {
         if let Some(entry) = state
             .renderer
-            .get_cached_for_url_and_size(&id, target_url, query.w, query.h)
+            .get_cached_for_screen(&id, screen.screen_type, target_url, query.w, query.h)
             .await
         {
             let rendered_at_str = entry.rendered_at.to_rfc3339();

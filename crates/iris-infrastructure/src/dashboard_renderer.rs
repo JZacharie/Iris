@@ -16,6 +16,31 @@ const DEFAULT_GRAFANA_PASSWORD: &str = "Superman69230";
 const DEFAULT_OPENOBSERVE_EMAIL: &str = "joseph@zacharie.org";
 const DEFAULT_OPENOBSERVE_PASSWORD: &str = "Superman69230";
 
+pub const CURATED_GRAFANA_URLS: &[&str] = &[
+    "https://grafana.zacharie.org/d/b9b5adf3-6cdb-409d-86ae-0482e25fc165/k8s-dashboard",
+    "https://grafana.zacharie.org/d/rYdddlPWk/node-exporter-full",
+    "https://grafana.zacharie.org/d/qPkgGHg7k/argocd",
+    "https://grafana.zacharie.org/d/cloudnative-pg/cloudnativepg",
+    "https://grafana.zacharie.org/d/wY4blRMGz/coredns",
+    "https://grafana.zacharie.org/d/tjRlQw6Zk/emqx-monitoring",
+    "https://grafana.zacharie.org/d/Kn5xm-gZk/rabbitmq-overview",
+    "https://grafana.zacharie.org/d/vaults/hashicorp-vault",
+    "https://grafana.zacharie.org/d/cilium-metrics/cilium-metrics",
+];
+
+pub const CURATED_OPENOBSERVE_IDS: &[&str] = &[
+    "7516898066293608448",
+    "7516898328903180289",
+    "7516531994134597633",
+    "7516513601809571840",
+    "7526637916655718400",
+    "7502190376086695936",
+    "7502190373440069632",
+    "7502190357904367616",
+    "7502190361909927936",
+    "7502197767322759168",
+];
+
 #[derive(Debug, Clone)]
 pub struct DashboardRendererConfig {
     pub browserless_url: String,
@@ -140,8 +165,16 @@ impl DashboardRenderer {
         (width, height)
     }
 
-    fn cache_key(screen_id: &str, width: u32, height: u32) -> String {
-        format!("{screen_id}@{width}x{height}")
+    pub fn canonical_target_key(&self, screen_type: ScreenType, raw_url: &str) -> String {
+        match screen_type {
+            ScreenType::Grafana => self.format_internal_grafana_url(raw_url),
+            ScreenType::OpenObserve => self.format_internal_openobserve_url(raw_url),
+            _ => raw_url.trim().to_string(),
+        }
+    }
+
+    fn cache_key(target_key: &str, width: u32, height: u32) -> String {
+        format!("{target_key}@{width}x{height}")
     }
 
     pub async fn get_cached(&self, screen_id: &str) -> Option<RenderCacheEntry> {
@@ -178,23 +211,81 @@ impl DashboardRenderer {
         h: Option<u32>,
     ) -> Option<RenderCacheEntry> {
         let (width, height) = self.normalize_dimensions(w, h);
-        let key = Self::cache_key(screen_id, width, height);
+        let expected_trimmed = expected_url.trim();
         let lock = self.cache.read().await;
-        if let Some(entry) = lock.get(&key) {
-            if expected_url.trim().is_empty() || entry.target_url == expected_url.trim() {
+
+        if !expected_trimmed.is_empty() {
+            let exact_key = Self::cache_key(expected_trimmed, width, height);
+            if let Some(entry) = lock.get(&exact_key) {
+                return Some(entry.clone());
+            }
+            if let Some(entry) = lock
+                .values()
+                .filter(|v| v.target_url == expected_trimmed)
+                .max_by_key(|v| (v.width == width && v.height == height, v.rendered_at))
+            {
                 return Some(entry.clone());
             }
         }
-        // Fallback: if exact dimensions aren't rendered yet, check if we have any entry for this screen + URL
-        let prefix = format!("{screen_id}@");
-        lock.iter()
-            .filter(|(k, v)| {
-                (k.starts_with(&prefix) || *k == screen_id)
-                    && (expected_url.trim().is_empty() || v.target_url == expected_url.trim())
-            })
-            .max_by_key(|(_, v)| v.rendered_at)
-            .map(|(_, v)| v.clone())
-            .filter(|entry| entry.width == width && entry.height == height)
+
+        let key = Self::cache_key(screen_id, width, height);
+        if let Some(entry) = lock.get(&key) {
+            if expected_trimmed.is_empty() || entry.target_url == expected_trimmed {
+                return Some(entry.clone());
+            }
+        }
+        None
+    }
+
+    pub async fn get_cached_for_screen(
+        &self,
+        screen_id: &str,
+        screen_type: ScreenType,
+        expected_url: &str,
+        w: Option<u32>,
+        h: Option<u32>,
+    ) -> Option<RenderCacheEntry> {
+        let (width, height) = self.normalize_dimensions(w, h);
+        let canonical = self.canonical_target_key(screen_type, expected_url);
+        let lock = self.cache.read().await;
+
+        let exact_key = Self::cache_key(&canonical, width, height);
+        if let Some(entry) = lock.get(&exact_key) {
+            return Some(entry.clone());
+        }
+
+        // Fall back to another resolution of the exact same canonical dashboard URL
+        if let Some(entry) = lock
+            .values()
+            .filter(|v| v.target_url == canonical)
+            .max_by_key(|v| (v.width == width && v.height == height, v.rendered_at))
+        {
+            return Some(entry.clone());
+        }
+
+        if expected_url.trim().is_empty() {
+            let screen_key = Self::cache_key(screen_id, width, height);
+            return lock.get(&screen_key).cloned();
+        }
+
+        None
+    }
+
+    pub async fn is_fresh(
+        &self,
+        screen_type: ScreenType,
+        target_url: &str,
+        width: u32,
+        height: u32,
+        max_age_secs: i64,
+    ) -> bool {
+        let canonical = self.canonical_target_key(screen_type, target_url);
+        let key = Self::cache_key(&canonical, width, height);
+        let lock = self.cache.read().await;
+        if let Some(entry) = lock.get(&key) {
+            return (Utc::now() - entry.rendered_at).num_seconds() < max_age_secs;
+        }
+        false
     }
 
     pub async fn render_and_cache(
@@ -217,10 +308,11 @@ impl DashboardRenderer {
     ) -> Result<RenderCacheEntry> {
         let (width, height) = self.normalize_dimensions(w, h);
         let normalized_target = target_url.trim().to_string();
-        let cache_key = Self::cache_key(screen_id, width, height);
-        let flight_key = format!("{cache_key}|{normalized_target}");
+        let canonical = self.canonical_target_key(screen_type, &normalized_target);
+        let cache_key = Self::cache_key(&canonical, width, height);
+        let flight_key = cache_key.clone();
 
-        // Single-flight deduplication: prevent duplicate concurrent renders for the same screen+url
+        // Single-flight deduplication: prevent duplicate concurrent renders for the same canonical url+size
         loop {
             let is_busy = {
                 let mut guard = self.in_flight.lock().await;
@@ -236,11 +328,12 @@ impl DashboardRenderer {
                 break;
             }
 
-            // A render for this exact screen+url is already running, await it
+            // A render for this exact canonical url+size is already running, await it
             tokio::time::sleep(Duration::from_millis(500)).await;
             if let Some(cached) = self
-                .get_cached_for_url_and_size(
+                .get_cached_for_screen(
                     screen_id,
+                    screen_type,
                     &normalized_target,
                     Some(width),
                     Some(height),
@@ -281,7 +374,7 @@ impl DashboardRenderer {
             image_png,
             rendered_at: Utc::now(),
             duration_ms,
-            target_url: normalized_target,
+            target_url: canonical,
             width,
             height,
         };
@@ -289,6 +382,9 @@ impl DashboardRenderer {
         {
             let mut lock = self.cache.write().await;
             lock.insert(cache_key, entry.clone());
+            if !screen_id.starts_with("preset-") {
+                lock.insert(Self::cache_key(screen_id, width, height), entry.clone());
+            }
         }
 
         info!(
@@ -736,19 +832,20 @@ impl DashboardRenderer {
                 // Always prioritize the currently displayed screen first
                 targets.sort_by_key(|s| Some(s.id.clone()) != displayed_id);
 
+                // Pre-render the tablet's 3 exact stage resolutions:
+                // 1. With expanded sidebar (1528x1122)
+                // 2. With collapsed sidebar (1710x1122)
+                // 3. Without sidebar / full kiosk (1776x1122)
+                let resolutions: [(u32, u32); 3] = [(1528, 1122), (1776, 1122), (1710, 1122)];
+
                 for screen in targets {
                     let target_url = if screen.url.trim().is_empty() {
                         &snap.formatted_url
                     } else {
                         &screen.url
                     };
-                    // Pre-render the tablet's 3 exact stage resolutions:
-                    // 1. With expanded sidebar (1528x1122)
-                    // 2. With collapsed sidebar (1710x1122)
-                    // 3. Without sidebar / full kiosk (1776x1122)
-                    let presets: [(u32, u32); 3] = [(1528, 1122), (1776, 1122), (1710, 1122)];
-                    for (pw, ph) in presets {
-                        match renderer
+                    for (pw, ph) in resolutions {
+                        if let Err(e) = renderer
                             .render_and_cache_sized(
                                 &screen.id,
                                 screen.screen_type,
@@ -758,21 +855,72 @@ impl DashboardRenderer {
                             )
                             .await
                         {
+                            warn!(
+                                screen = %screen.name,
+                                width = pw,
+                                height = ph,
+                                error = %e,
+                                "Background pre-render failed"
+                            );
+                        }
+                    }
+                }
+
+                // Pre-calculate ALL curated Grafana and OpenObserve preset dashboards
+                // Pass A: warm primary tablet resolution (1528x1122) first for every preset (refresh if >5m old)
+                // Pass B: warm alternate resolutions (1776x1122, 1710x1122) (refresh if >10m old)
+                let mut curated_targets: Vec<(String, ScreenType, &str)> =
+                    Vec::with_capacity(CURATED_GRAFANA_URLS.len() + CURATED_OPENOBSERVE_IDS.len());
+                for (idx, url) in CURATED_GRAFANA_URLS.iter().enumerate() {
+                    curated_targets.push((
+                        format!("preset-grafana-{idx}"),
+                        ScreenType::Grafana,
+                        *url,
+                    ));
+                }
+                for (idx, id) in CURATED_OPENOBSERVE_IDS.iter().enumerate() {
+                    curated_targets.push((
+                        format!("preset-o2-{idx}"),
+                        ScreenType::OpenObserve,
+                        *id,
+                    ));
+                }
+
+                for (res_idx, (pw, ph)) in resolutions.iter().copied().enumerate() {
+                    let max_age_secs = if res_idx == 0 { 300 } else { 600 };
+                    for (preset_id, screen_type, target_url) in &curated_targets {
+                        if renderer
+                            .is_fresh(*screen_type, target_url, pw, ph, max_age_secs)
+                            .await
+                        {
+                            continue;
+                        }
+                        match renderer
+                            .render_and_cache_sized(
+                                preset_id,
+                                *screen_type,
+                                target_url,
+                                Some(pw),
+                                Some(ph),
+                            )
+                            .await
+                        {
                             Ok(_) => {
                                 debug!(
-                                    screen = %screen.name,
+                                    preset = %preset_id,
                                     width = pw,
                                     height = ph,
-                                    "Background pre-render updated"
+                                    "Curated preset pre-render cached"
                                 );
                             }
                             Err(e) => {
                                 warn!(
-                                    screen = %screen.name,
+                                    preset = %preset_id,
+                                    url = %target_url,
                                     width = pw,
                                     height = ph,
                                     error = %e,
-                                    "Background pre-render failed"
+                                    "Curated preset pre-render failed"
                                 );
                             }
                         }
@@ -877,5 +1025,71 @@ mod tests {
             url,
             "http://o2-openobserve-router.openobserve.svc:5080/web/dashboards/view?org_identifier=default&dashboard=7526637916655718400&folder=default&hide_header=true"
         );
+    }
+
+    #[tokio::test]
+    async fn curated_presets_cache_simultaneously_without_collision() {
+        assert_eq!(CURATED_GRAFANA_URLS.len(), 9);
+        assert_eq!(CURATED_OPENOBSERVE_IDS.len(), 10);
+
+        let r = DashboardRenderer::new(DashboardRendererConfig::default());
+        let key_a = r.canonical_target_key(ScreenType::OpenObserve, CURATED_OPENOBSERVE_IDS[0]);
+        let key_b = r.canonical_target_key(
+            ScreenType::OpenObserve,
+            "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=7516898066293608448&folder=default",
+        );
+        assert_eq!(key_a, key_b);
+
+        let key_c = r.canonical_target_key(ScreenType::OpenObserve, CURATED_OPENOBSERVE_IDS[1]);
+        assert_ne!(key_a, key_c);
+
+        {
+            let mut lock = r.cache.write().await;
+            lock.insert(
+                DashboardRenderer::cache_key(&key_a, 1528, 1122),
+                RenderCacheEntry {
+                    image_png: vec![1, 2, 3],
+                    rendered_at: Utc::now(),
+                    duration_ms: 10,
+                    target_url: key_a.clone(),
+                    width: 1528,
+                    height: 1122,
+                },
+            );
+            lock.insert(
+                DashboardRenderer::cache_key(&key_c, 1528, 1122),
+                RenderCacheEntry {
+                    image_png: vec![4, 5, 6],
+                    rendered_at: Utc::now(),
+                    duration_ms: 10,
+                    target_url: key_c.clone(),
+                    width: 1528,
+                    height: 1122,
+                },
+            );
+        }
+
+        // Lookup by full URL hits short-ID pre-render, even when requesting alternate resolution
+        let hit_a = r
+            .get_cached_for_screen(
+                "o2-overview",
+                ScreenType::OpenObserve,
+                "https://o2-openobserve.p.zacharie.org/web/dashboards/view?org_identifier=default&dashboard=7516898066293608448&folder=default",
+                Some(1710),
+                Some(1122),
+            )
+            .await;
+        assert_eq!(hit_a.map(|e| e.image_png), Some(vec![1, 2, 3]));
+
+        let hit_c = r
+            .get_cached_for_screen(
+                "o2-overview",
+                ScreenType::OpenObserve,
+                CURATED_OPENOBSERVE_IDS[1],
+                Some(1528),
+                Some(1122),
+            )
+            .await;
+        assert_eq!(hit_c.map(|e| e.image_png), Some(vec![4, 5, 6]));
     }
 }
