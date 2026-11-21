@@ -7,8 +7,8 @@ use iris_core::{
     DashboardUrlFormatter, DeckActionEvent, DeckActionKind, DeckButton, DisplayScreen, DriveOrder,
     EcoleDirecteStatus, GitHubPrSummary, HomeAssistantData, InfraStatus, IrisCommand,
     IrisPersistedState, IrisSettings, IrisSnapshot, KusanagiInfraData, MqttCommandParser,
-    MqttConnectionState, OrgEvent, OrgFeedData, OrgMail, OrgNote, PcTelemetry, Result, ScreenType,
-    ShoppingItem, SlackMessageItem, WeatherForecast,
+    MqttConnectionState, OrgEvent, OrgFeedData, OrgMail, OrgNote, PcTelemetry, Printer3DStatus,
+    Result, ScreenType, ShoppingItem, SlackMessageItem, VoiceIntentResult, WeatherForecast,
 };
 use tokio::sync::{broadcast, RwLock};
 use tracing::{info, warn};
@@ -33,6 +33,8 @@ struct InnerState {
     infra: InfraStatus,
     home_assistant: Option<HomeAssistantData>,
     ecoledirecte: Option<EcoleDirecteStatus>,
+    printer3d: Option<Printer3DStatus>,
+    last_voice_intent: Option<VoiceIntentResult>,
     deck_buttons: Vec<DeckButton>,
     pc_telemetry: Option<PcTelemetry>,
     last_deck_action: Option<DeckActionEvent>,
@@ -74,6 +76,8 @@ impl InnerState {
             infra: InfraStatus::default(),
             home_assistant: None,
             ecoledirecte: None,
+            printer3d: None,
+            last_voice_intent: None,
             deck_buttons: persisted.deck_buttons,
             pc_telemetry: None,
             last_deck_action: None,
@@ -149,6 +153,8 @@ impl InnerState {
             infra: self.infra.clone(),
             home_assistant: self.home_assistant.clone(),
             agent_reports: self.agent_reports.clone(),
+            printer3d: self.printer3d.clone(),
+            last_voice_intent: self.last_voice_intent.clone(),
             deck_buttons: self.deck_buttons.clone(),
             pc_telemetry: self.pc_telemetry.clone(),
             last_deck_action: self.last_deck_action.clone(),
@@ -201,6 +207,7 @@ fn compute_barthes_state(
                 | ScreenType::OrgHome
                 | ScreenType::OrgNews
                 | ScreenType::OrgAgents
+                | ScreenType::Org3DPrint
         )
     }) {
         return BarthesState::Studium;
@@ -809,6 +816,7 @@ impl IrisController {
         ha: Option<HomeAssistantData>,
         kusanagi: Option<KusanagiInfraData>,
         slack_messages: Option<Vec<SlackMessageItem>>,
+        printer: Option<Printer3DStatus>,
     ) -> IrisSnapshot {
         let snapshot = {
             let mut state = self.inner.write().await;
@@ -833,6 +841,32 @@ impl IrisController {
                 state.comms.slack_messages = msgs;
                 state.comms.updated_at_epoch_ms = Utc::now().timestamp_millis();
             }
+            if let Some(p) = printer {
+                state.printer3d = Some(p);
+            }
+            state.snapshot()
+        };
+        self.broadcast_only(&snapshot).await;
+        snapshot
+    }
+
+    pub async fn apply_printer3d_telemetry(
+        &self,
+        printer: Option<Printer3DStatus>,
+    ) -> IrisSnapshot {
+        let snapshot = {
+            let mut state = self.inner.write().await;
+            state.printer3d = printer;
+            state.snapshot()
+        };
+        self.broadcast_only(&snapshot).await;
+        snapshot
+    }
+
+    pub async fn record_voice_intent(&self, result: VoiceIntentResult) -> IrisSnapshot {
+        let snapshot = {
+            let mut state = self.inner.write().await;
+            state.last_voice_intent = Some(result);
             state.snapshot()
         };
         self.broadcast_only(&snapshot).await;
@@ -1252,7 +1286,7 @@ mod tests {
             ..Default::default()
         };
         let snap = controller
-            .apply_fast_telemetry(None, Some(kusanagi), None)
+            .apply_fast_telemetry(None, Some(kusanagi), None, None)
             .await;
         assert_eq!(snap.barthes_state, BarthesState::Connotation);
     }

@@ -113,6 +113,35 @@ impl SlackClient {
 
         parse_slack_history(&body, &self.channel_label)
     }
+
+    pub async fn post_message(&self, text: &str) -> Result<()> {
+        let Some(token) = &self.token else {
+            return Ok(());
+        };
+
+        let payload = serde_json::json!({
+            "channel": self.channel_id,
+            "text": text,
+        });
+
+        let resp = self
+            .http
+            .post("https://slack.com/api/chat.postMessage")
+            .bearer_auth(token)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| IrisError::Persistence(format!("Slack post failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            return Err(IrisError::Persistence(format!(
+                "Slack post HTTP {}",
+                resp.status()
+            )));
+        }
+
+        Ok(())
+    }
 }
 
 impl Default for SlackClient {

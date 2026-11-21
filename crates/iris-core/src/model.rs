@@ -16,6 +16,8 @@ pub enum ScreenType {
     OrgHome,
     OrgNews,
     OrgAgents,
+    #[serde(alias = "ORG_3D_PRINT")]
+    Org3DPrint,
 }
 
 impl ScreenType {
@@ -37,6 +39,7 @@ impl ScreenType {
             Self::OrgHome => "Maison & Énergie",
             Self::OrgNews => "Actualités Kusanagi",
             Self::OrgAgents => "Rapports Agents & Upgrades",
+            Self::Org3DPrint => "Impression 3D & Ender",
         }
     }
 }
@@ -775,6 +778,51 @@ pub struct IrisPersistedState {
     pub active_screen_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Printer3DStatus {
+    pub connected: bool,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub message: String,
+    #[serde(default)]
+    pub progress_pct: u32,
+    #[serde(default)]
+    pub time_elapsed_secs: u64,
+    #[serde(default)]
+    pub time_remaining_secs: u64,
+    #[serde(default)]
+    pub filename: String,
+    #[serde(default)]
+    pub nozzle_temp_c: i32,
+    #[serde(default)]
+    pub nozzle_target_c: i32,
+    #[serde(default)]
+    pub bed_temp_c: i32,
+    #[serde(default)]
+    pub bed_target_c: i32,
+    #[serde(default)]
+    pub plug_on: bool,
+    #[serde(default)]
+    pub power_w: i32,
+    #[serde(default)]
+    pub updated_at_epoch_ms: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceIntentResult {
+    pub raw_text: String,
+    pub intent_type: String,
+    pub spoken_reply: String,
+    #[serde(default)]
+    pub target_screen_id: Option<String>,
+    #[serde(default)]
+    pub action_executed: Option<String>,
+    pub timestamp_epoch_ms: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IrisSnapshot {
@@ -794,6 +842,10 @@ pub struct IrisSnapshot {
     pub home_assistant: Option<HomeAssistantData>,
     #[serde(default)]
     pub agent_reports: Vec<AgentUpgradeReport>,
+    #[serde(default)]
+    pub printer3d: Option<Printer3DStatus>,
+    #[serde(default)]
+    pub last_voice_intent: Option<VoiceIntentResult>,
     pub deck_buttons: Vec<DeckButton>,
     pub pc_telemetry: Option<PcTelemetry>,
     pub last_deck_action: Option<DeckActionEvent>,

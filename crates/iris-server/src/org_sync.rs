@@ -5,8 +5,8 @@ use chrono::Utc;
 use iris_application::IrisController;
 use iris_core::{ActiveAlert, AlertSeverity};
 use iris_infrastructure::{
-    AlexaMcpClient, AmarakiClient, EcoleDirecteClient, GitHubClient, HomeAssistantClient,
-    IcalClient, K8sClient, KusanagiClient, OpenMeteoClient, SlackClient,
+    AlexaMcpClient, AmarakiClient, EcoleDirecteClient, EnderClient, GitHubClient,
+    HomeAssistantClient, IcalClient, K8sClient, KusanagiClient, OpenMeteoClient, SlackClient,
 };
 use tracing::{debug, warn};
 
@@ -67,6 +67,15 @@ impl PowerOverloadMonitor {
     }
 }
 
+struct FastSyncClients<'a> {
+    ha: &'a HomeAssistantClient,
+    kusanagi: &'a KusanagiClient,
+    slack: &'a SlackClient,
+    amaraki: &'a AmarakiClient,
+    alexa: &'a AlexaMcpClient,
+    ender: &'a EnderClient,
+}
+
 pub fn spawn_org_sync_loop(controller: Arc<IrisController>) {
     let fast_ctrl = Arc::clone(&controller);
     tokio::spawn(async move {
@@ -75,18 +84,18 @@ pub fn spawn_org_sync_loop(controller: Arc<IrisController>) {
         let slack = SlackClient::from_env();
         let amaraki = AmarakiClient::from_env();
         let alexa = AlexaMcpClient::new();
+        let ender = EnderClient::from_env();
         let mut power_monitor = PowerOverloadMonitor::new();
         loop {
-            refresh_fast_once(
-                &fast_ctrl,
-                &ha,
-                &kusanagi,
-                &slack,
-                &amaraki,
-                &alexa,
-                Some(&mut power_monitor),
-            )
-            .await;
+            let clients = FastSyncClients {
+                ha: &ha,
+                kusanagi: &kusanagi,
+                slack: &slack,
+                amaraki: &amaraki,
+                alexa: &alexa,
+                ender: &ender,
+            };
+            refresh_fast_once(&fast_ctrl, &clients, Some(&mut power_monitor)).await;
             tokio::time::sleep(Duration::from_secs(60)).await;
         }
     });
@@ -119,6 +128,7 @@ pub async fn refresh_org_now(controller: Arc<IrisController>) {
     let kusanagi = KusanagiClient::from_env();
     let slack = SlackClient::from_env();
     let amaraki = AmarakiClient::from_env();
+    let ender = EnderClient::from_env();
     let weather = OpenMeteoClient::new();
     let ical = IcalClient::new();
     let k8s = K8sClient::new();
@@ -126,8 +136,17 @@ pub async fn refresh_org_now(controller: Arc<IrisController>) {
     let alexa = AlexaMcpClient::new();
     let ecoledirecte = EcoleDirecteClient::from_env();
 
+    let fast_clients = FastSyncClients {
+        ha: &ha,
+        kusanagi: &kusanagi,
+        slack: &slack,
+        amaraki: &amaraki,
+        alexa: &alexa,
+        ender: &ender,
+    };
+
     tokio::join!(
-        refresh_fast_once(&controller, &ha, &kusanagi, &slack, &amaraki, &alexa, None),
+        refresh_fast_once(&controller, &fast_clients, None),
         refresh_slow_once(
             &controller,
             &weather,
@@ -142,18 +161,14 @@ pub async fn refresh_org_now(controller: Arc<IrisController>) {
 
 async fn refresh_fast_once(
     controller: &IrisController,
-    ha: &HomeAssistantClient,
-    kusanagi: &KusanagiClient,
-    slack: &SlackClient,
-    amaraki: &AmarakiClient,
-    alexa: &AlexaMcpClient,
+    clients: &FastSyncClients<'_>,
     power_monitor: Option<&mut PowerOverloadMonitor>,
 ) {
     let ha_fut = async {
-        if !ha.is_configured() {
+        if !clients.ha.is_configured() {
             return None;
         }
-        match ha.fetch_data().await {
+        match clients.ha.fetch_data().await {
             Ok(data) => Some(data),
             Err(err) => {
                 warn!(%err, "Failed to fetch Home Assistant states");
@@ -162,7 +177,7 @@ async fn refresh_fast_once(
         }
     };
     let kus_fut = async {
-        match kusanagi.fetch_infra().await {
+        match clients.kusanagi.fetch_infra().await {
             Ok(data) => Some(data),
             Err(err) => {
                 debug!(%err, "Kusanagi infra endpoints unavailable");
@@ -171,10 +186,10 @@ async fn refresh_fast_once(
         }
     };
     let slack_fut = async {
-        if !slack.is_configured() {
+        if !clients.slack.is_configured() {
             return None;
         }
-        match slack.fetch_recent_messages().await {
+        match clients.slack.fetch_recent_messages().await {
             Ok(msgs) => Some(msgs),
             Err(err) => {
                 debug!(%err, "Slack recent messages unavailable");
@@ -183,7 +198,7 @@ async fn refresh_fast_once(
         }
     };
     let amaraki_fut = async {
-        match amaraki.fetch_reports().await {
+        match clients.amaraki.fetch_reports().await {
             Ok(reports) => Some(reports),
             Err(err) => {
                 debug!(%err, "Amaraki agent reports unavailable");
@@ -191,17 +206,26 @@ async fn refresh_fast_once(
             }
         }
     };
+    let ender_fut = async {
+        match clients.ender.fetch_status().await {
+            Ok(status) => Some(status),
+            Err(err) => {
+                debug!(%err, "Ender 3D status unavailable");
+                None
+            }
+        }
+    };
 
-    let (ha_data, kus_data, slack_msgs, amaraki_reports) =
-        tokio::join!(ha_fut, kus_fut, slack_fut, amaraki_fut);
+    let (ha_data, kus_data, slack_msgs, amaraki_reports, ender_status) =
+        tokio::join!(ha_fut, kus_fut, slack_fut, amaraki_fut, ender_fut);
     let power_sample = ha_data.as_ref().and_then(|d| {
         d.energy
             .home_consumption_w
             .map(|c| (c, d.energy.solar_now_w.unwrap_or(0)))
     });
-    if ha_data.is_some() || kus_data.is_some() || slack_msgs.is_some() {
+    if ha_data.is_some() || kus_data.is_some() || slack_msgs.is_some() || ender_status.is_some() {
         controller
-            .apply_fast_telemetry(ha_data, kus_data, slack_msgs)
+            .apply_fast_telemetry(ha_data, kus_data, slack_msgs, ender_status)
             .await;
     }
     if let Some(reports) = amaraki_reports {
@@ -231,8 +255,10 @@ async fn refresh_fast_once(
                     acknowledged: false,
                 };
                 controller.trigger_alert(alert).await;
-                let (alexa_res, ha_res) =
-                    tokio::join!(alexa.announce(&tts_msg), ha.notify_power_overload(&tts_msg));
+                let (alexa_res, ha_res) = tokio::join!(
+                    clients.alexa.announce(&tts_msg),
+                    clients.ha.notify_power_overload(&tts_msg)
+                );
                 if let Err(err) = alexa_res {
                     warn!(%err, "Alexa MCP announce failed for power overload alert");
                 }

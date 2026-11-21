@@ -1,4 +1,8 @@
 $ErrorActionPreference = "Stop"
+Set-Location $PSScriptRoot
+if (-not $env:CARGO_TARGET_DIR) {
+    $env:CARGO_TARGET_DIR = "D:\cargo-targets\iris"
+}
 
 function Invoke-Step {
     param([string]$Title, [scriptblock]$Cmd)

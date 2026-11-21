@@ -376,6 +376,97 @@
       max-height: 420px;
       overflow-y: auto;
     }
+    /* Meishi Voice HUD & Controls */
+    .meishi-mic-btn {
+      position: fixed; bottom: 24px; right: 28px; z-index: 60;
+      width: 62px; height: 62px; border-radius: 50%;
+      background: linear-gradient(135deg, #0284c7, #7c3aed);
+      border: 2.5px solid #38bdf8; color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 28px; cursor: pointer;
+      box-shadow: 0 10px 28px rgba(2,132,199,0.55);
+      transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.2s ease;
+      user-select: none;
+    }
+    .meishi-mic-btn:hover { transform: scale(1.08); box-shadow: 0 14px 34px rgba(2,132,199,0.7); }
+    .meishi-mic-btn:active { transform: scale(0.94); }
+    .meishi-mic-btn.listening {
+      background: linear-gradient(135deg, #ef4444, #dc2626);
+      border-color: #fca5a5;
+      animation: pulse-mic 1.2s infinite;
+      box-shadow: 0 0 32px rgba(239,68,68,0.75);
+    }
+    @keyframes pulse-mic {
+      0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239,68,68,0.75); }
+      70% { transform: scale(1.14); box-shadow: 0 0 0 18px rgba(239,68,68,0); }
+      100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239,68,68,0); }
+    }
+    .voice-feedback-banner {
+      position: fixed; bottom: 100px; right: 28px; z-index: 60;
+      background: rgba(15, 23, 42, 0.95);
+      backdrop-filter: blur(14px);
+      border: 1.5px solid var(--primary);
+      border-radius: 16px;
+      padding: 14px 18px;
+      max-width: 380px;
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+      box-shadow: 0 16px 36px rgba(0,0,0,0.75);
+      animation: slideInUp 0.22s ease;
+    }
+    .voice-feedback-banner.visible { display: flex; }
+    .voice-bubble-user { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+    .voice-bubble-agent { font-size: 14px; color: var(--text); font-weight: 600; line-height: 1.35; }
+    .voice-bubble-action {
+      display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px;
+      background: rgba(56,189,248,0.18); color: var(--primary); font-weight: 700; align-self: flex-start;
+    }
+    /* Theme Quick Bar */
+    .theme-topbar {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 8px 16px; background: rgba(15, 23, 42, 0.85); border-bottom: 1px solid var(--border);
+      overflow-x: auto; flex-shrink: 0; min-height: 52px;
+    }
+    .theme-group { display: flex; align-items: center; gap: 8px; overflow-x: auto; }
+    .theme-pill-btn {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 6px 14px; border-radius: 999px;
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--text); font-size: 13px; font-weight: 600; cursor: pointer;
+      white-space: nowrap; transition: all 0.15s ease;
+    }
+    .theme-pill-btn:hover { border-color: var(--primary); color: var(--primary); }
+    .theme-pill-btn.active {
+      background: rgba(56, 189, 248, 0.22); border-color: var(--primary); color: var(--primary);
+    }
+    /* 3D Printing Specific Styles */
+    .print-progress-ring-wrap {
+      position: relative; width: 190px; height: 190px; margin: 0 auto;
+      display: flex; align-items: center; justify-content: center; flex-direction: column;
+    }
+    .print-progress-ring { transform: rotate(-90deg); }
+    .thermal-box {
+      background: linear-gradient(155deg, rgba(17,24,39,0.95), rgba(30,41,59,0.7));
+      border: 1px solid var(--border); border-radius: 16px; padding: 16px; text-align: center;
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    .thermal-temp { font-size: 36px; font-weight: 800; font-variant-numeric: tabular-nums; }
+    .thermal-temp.hot { color: #f87171; }
+    .thermal-temp.warm { color: #fbbf24; }
+    .thermal-temp.cold { color: #38bdf8; }
+    /* Domotique Zones Styles */
+    .zone-section { margin-bottom: 20px; }
+    .zone-title {
+      font-size: 14px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em;
+      color: var(--primary); margin-bottom: 12px; display: flex; align-items: center; gap: 8px;
+    }
+    .zone-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
+    .zone-card {
+      background: linear-gradient(155deg, rgba(17,24,39,0.95), rgba(30,41,59,0.7));
+      border: 1px solid var(--border); border-radius: 16px; padding: 16px;
+      display: flex; flex-direction: column; justify-content: space-between; gap: 10px;
+    }
   </style>
 </head>
 <body>
@@ -433,6 +524,19 @@
     </aside>
 
     <div class="main-area">
+      <header class="theme-topbar">
+        <div class="theme-group">
+          <button class="theme-pill-btn" id="theme-btn-3d" data-screen="org-3d-print">🖨️ 3D Print</button>
+          <button class="theme-pill-btn" id="theme-btn-domo" data-screen="org-home">🏠 Domotique</button>
+          <button class="theme-pill-btn" id="theme-btn-cluster" data-screen="org-life-infra">☸️ Cluster jo3</button>
+          <button class="theme-pill-btn" id="theme-btn-agents" data-screen="org-agents">🤖 Agents</button>
+          <button class="theme-pill-btn" id="theme-btn-hub" data-screen="org-overview">📊 Hub</button>
+        </div>
+        <div class="row" style="gap:10px;">
+          <button class="btn" id="btn-open-voice-modal" title="Saisie de commande vocale ou texte">💬 Commande</button>
+        </div>
+      </header>
+
       <div id="alert-banner" class="alert-banner">
         <div>
           <span id="alert-severity" class="alert-tag">CRITIQUE</span>
@@ -475,6 +579,7 @@
             <option value="ORG_LIFE_INFRA">Vie Quotidienne & Infra</option>
             <option value="ORG_NEWS">Actualités Kusanagi</option>
             <option value="ORG_AGENTS">Rapports Agents & Upgrades</option>
+            <option value="ORG_3D_PRINT">Impression 3D & Ender</option>
             <option value="ORG_STREAM_DECK">Stream Deck & PC</option>
             <option value="ORG_AGENDA">Org — Planning & Mails</option>
             <option value="ORG_NOTES">Org — Notes</option>
@@ -522,6 +627,40 @@
     </div>
   </div>
 
-  <script src="/app.js?v=20261120_0635"></script>
+  <!-- Meishi Voice Assistant Tablet HUD -->
+  <button id="btn-meishi-mic" class="meishi-mic-btn" title="Activer l'assistant vocal Meishi (Appuyez pour parler)">🎙️</button>
+  <div id="voice-feedback-toast" class="voice-feedback-banner">
+    <div class="voice-bubble-user" id="voice-user-text">Écoute en cours...</div>
+    <div class="voice-bubble-agent" id="voice-agent-reply">...</div>
+    <span class="voice-bubble-action" id="voice-action-tag">Meishi jo3</span>
+  </div>
+
+  <div id="modal-voice" class="modal-backdrop">
+    <div class="modal" style="max-width:540px;">
+      <div class="row" style="justify-content: space-between; margin-bottom: 16px;">
+        <h2>🎙️ Assistant Vocal & Playbooks Meishi</h2>
+        <button class="btn" onclick="closeModal('modal-voice')">Fermer</button>
+      </div>
+      <p style="color:var(--muted);font-size:13px;margin-bottom:14px;">
+        Parlez ou tapez une instruction pour basculer de thème (3D, Domotique, Cluster, Agents) ou lancer un playbook autonome.
+      </p>
+      <div class="field">
+        <label>Instruction</label>
+        <div class="row">
+          <input id="input-voice-text" placeholder="Ex: Focus sur l'impression 3D, Mets à jour les PR, Allume l'imprimante..." style="flex:1;" />
+          <button class="btn primary" id="btn-send-voice-text">Envoyer</button>
+        </div>
+      </div>
+      <div class="row" style="gap:8px;margin-top:12px;flex-wrap:wrap;">
+        <button class="btn" onclick="sendVoicePrompt('Focus sur impression 3D')">🖨️ Focus 3D</button>
+        <button class="btn" onclick="sendVoicePrompt('Affiche la domotique')">🏠 Domotique</button>
+        <button class="btn" onclick="sendVoicePrompt('État du cluster')">☸️ Cluster jo3</button>
+        <button class="btn" onclick="sendVoicePrompt('Mise à jour des PR')">🤖 Update PRs</button>
+        <button class="btn" onclick="sendVoicePrompt('Diagnostic du cluster')">🩺 Diagnostic K8s</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js?v=20261121_1330"></script>
 </body>
 </html>

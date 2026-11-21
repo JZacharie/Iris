@@ -13,7 +13,10 @@ use iris_core::{
     DriveOrder, IrisSettings, IrisSnapshot, OrgEvent, OrgMail, PcTelemetry, ScreenType,
     ShoppingItem,
 };
-use iris_infrastructure::{AmarakiClient, DashboardRenderer, RumqttcAdapter};
+use iris_infrastructure::{
+    AmarakiClient, DashboardRenderer, EnderClient, ParsedVoiceAction, RumqttcAdapter, SlackClient,
+    VoiceIntentEngine,
+};
 use prometheus::{Encoder, TextEncoder};
 use serde::Deserialize;
 use serde_json::Value;
@@ -24,6 +27,9 @@ pub struct AppState {
     pub controller: Arc<IrisController>,
     pub mqtt: Arc<RumqttcAdapter>,
     pub renderer: Arc<DashboardRenderer>,
+    pub ender: Arc<EnderClient>,
+    pub slack: Arc<SlackClient>,
+    pub amaraki: Arc<AmarakiClient>,
 }
 
 pub fn api_router(state: AppState) -> Router {
@@ -65,6 +71,17 @@ pub fn api_router(state: AppState) -> Router {
             get(get_agent_reports).post(post_agent_report),
         )
         .route("/api/agents/trigger", post(trigger_amaraki_agent))
+        .route("/api/voice/intent", post(post_voice_intent))
+        .route("/api/printer3d/status", get(get_printer3d_status))
+        .route("/api/printer3d/power/on", post(power_on_printer3d))
+        .route("/api/printer3d/power/off", post(power_off_printer3d))
+        .route("/api/printer3d/cooldown", post(cooldown_printer3d))
+        .route(
+            "/api/printer3d/wake-and-print",
+            post(wake_and_print_printer3d),
+        )
+        .route("/api/cluster/diagnose", post(trigger_cluster_diagnose))
+        .route("/api/cluster/remediate", post(trigger_cluster_remediate))
         .route("/api/deck/trigger", post(trigger_deck_button))
         .route("/api/deck/buttons", post(upsert_deck_button))
         .route("/api/deck/buttons/{id}", delete(delete_deck_button))
@@ -557,6 +574,180 @@ async fn trigger_amaraki_agent(
         Err(err) => (
             StatusCode::BAD_GATEWAY,
             Json(serde_json::json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct VoiceIntentPayload {
+    text: String,
+}
+
+async fn post_voice_intent(
+    State(state): State<AppState>,
+    Json(payload): Json<VoiceIntentPayload>,
+) -> impl IntoResponse {
+    let (result, action) = VoiceIntentEngine::parse(&payload.text);
+
+    match &action {
+        ParsedVoiceAction::NavigateScreen(screen_id) => {
+            let _ = state.controller.select_screen(screen_id).await;
+        }
+        ParsedVoiceAction::TriggerAgent { agent, prompt } => {
+            let _ = state.controller.select_screen("org-agents").await;
+            let amaraki = Arc::clone(&state.amaraki);
+            let ag = agent.clone();
+            let pr = prompt.clone();
+            tokio::spawn(async move {
+                let _ = amaraki.trigger_agent(&ag, &pr, Some("#ai")).await;
+            });
+        }
+        ParsedVoiceAction::Printer3DPowerOn => {
+            let _ = state.controller.select_screen("org-3d-print").await;
+            let ender = Arc::clone(&state.ender);
+            tokio::spawn(async move {
+                let _ = ender.power_on().await;
+            });
+        }
+        ParsedVoiceAction::Printer3DCooldown => {
+            let _ = state.controller.select_screen("org-3d-print").await;
+            let ender = Arc::clone(&state.ender);
+            tokio::spawn(async move {
+                let _ = ender.cooldown_and_off().await;
+            });
+        }
+        ParsedVoiceAction::None => {}
+    }
+
+    let _snap = state.controller.record_voice_intent(result.clone()).await;
+
+    let slack = Arc::clone(&state.slack);
+    let slack_msg = format!(
+        "🎙️ *Commande Vocale Iris (Tablette)*\n• *Joe* : {}\n• *Assistant* : {}\n• _Action_ : `{}`",
+        payload.text, result.spoken_reply, result.intent_type
+    );
+    tokio::spawn(async move {
+        let _ = slack.post_message(&slack_msg).await;
+    });
+
+    Json(result)
+}
+
+async fn get_printer3d_status(State(state): State<AppState>) -> impl IntoResponse {
+    match state.ender.fetch_status().await {
+        Ok(status) => {
+            state
+                .controller
+                .apply_printer3d_telemetry(Some(status.clone()))
+                .await;
+            Json(serde_json::to_value(status).unwrap_or_default())
+        }
+        Err(e) => Json(serde_json::json!({
+            "connected": false,
+            "error": e.to_string(),
+        })),
+    }
+}
+
+async fn power_on_printer3d(State(state): State<AppState>) -> impl IntoResponse {
+    let ok = state.ender.power_on().await.unwrap_or(false);
+    if let Ok(st) = state.ender.fetch_status().await {
+        state.controller.apply_printer3d_telemetry(Some(st)).await;
+    }
+    Json(serde_json::json!({ "success": ok }))
+}
+
+#[derive(Deserialize, Default)]
+struct PowerOffQuery {
+    #[serde(default)]
+    force: bool,
+}
+
+async fn power_off_printer3d(
+    State(state): State<AppState>,
+    Json(payload): Json<Option<PowerOffQuery>>,
+) -> impl IntoResponse {
+    let force = payload.map(|p| p.force).unwrap_or(false);
+    let ok = state.ender.power_off(force).await.unwrap_or(false);
+    if let Ok(st) = state.ender.fetch_status().await {
+        state.controller.apply_printer3d_telemetry(Some(st)).await;
+    }
+    Json(serde_json::json!({ "success": ok }))
+}
+
+async fn cooldown_printer3d(State(state): State<AppState>) -> impl IntoResponse {
+    let ok = state.ender.cooldown_and_off().await.unwrap_or(false);
+    if let Ok(st) = state.ender.fetch_status().await {
+        state.controller.apply_printer3d_telemetry(Some(st)).await;
+    }
+    Json(serde_json::json!({ "success": ok }))
+}
+
+async fn wake_and_print_printer3d(State(state): State<AppState>) -> impl IntoResponse {
+    let ok = state.ender.wake_and_print().await.unwrap_or(false);
+    Json(serde_json::json!({ "success": ok }))
+}
+
+async fn trigger_cluster_diagnose(State(state): State<AppState>) -> impl IntoResponse {
+    let _ = state.controller.select_screen("org-agents").await;
+    let res = state
+        .amaraki
+        .trigger_agent(
+            "agent-k8s-diagnostician",
+            "Diagnostic approfondi des pods, anomalies et santé du cluster jo3.",
+            Some("#ai"),
+        )
+        .await;
+    let slack = Arc::clone(&state.slack);
+    tokio::spawn(async move {
+        let _ = slack
+            .post_message(
+                "☸️ *Audit K8s jo3 déclenché depuis Iris* : Mission confiée à `agent-k8s-diagnostician`.",
+            )
+            .await;
+    });
+    match res {
+        Ok(job_id) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "success": true, "jobId": job_id })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn trigger_cluster_remediate(State(state): State<AppState>) -> impl IntoResponse {
+    let _ = state.controller.select_screen("org-agents").await;
+    let res = state
+        .amaraki
+        .trigger_agent(
+            "opencode-cluster-remediator",
+            "Analyse les dérives GitOps et applications ArgoCD dégradées, puis applique les remédiations.",
+            Some("#ai"),
+        )
+        .await;
+    let slack = Arc::clone(&state.slack);
+    tokio::spawn(async move {
+        let _ = slack
+            .post_message(
+                "🛠️ *Remédiation GitOps jo3 déclenchée depuis Iris* : Mission confiée à `opencode-cluster-remediator`.",
+            )
+            .await;
+    });
+    match res {
+        Ok(job_id) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "success": true, "jobId": job_id })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
         )
             .into_response(),
     }

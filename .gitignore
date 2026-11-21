@@ -4,6 +4,7 @@
 *.pdb
 
 # Local state & env
+.cargo/
 iris_state.json
 .env
 .env.local

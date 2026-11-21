@@ -96,9 +96,25 @@ function connectWs() {
       }
       lastReloadCounter = currentSnapshot.reloadCounter;
       render(currentSnapshot);
-    } catch (_) {}
+    } catch (err) {
+      console.error("Error processing websocket snapshot:", err);
+    }
   };
-  ws.onclose = () => setTimeout(connectWs, 3000);
+  ws.onerror = (err) => {
+    console.warn("WebSocket error:", err);
+  };
+  ws.onclose = () => {
+    console.log("WebSocket disconnected, reconnecting in 3s...");
+    setTimeout(() => {
+      api("/api/state").then((snap) => {
+        if (snap && snap.screens) {
+          currentSnapshot = snap;
+          render(snap);
+        }
+      }).catch(() => {});
+      connectWs();
+    }, 3000);
+  };
 }
 
 function render(snap) {
@@ -112,6 +128,7 @@ const SCREEN_ICONS = {
   ORG_HOME: "⚡",
   ORG_LIFE_INFRA: "☸️",
   ORG_AGENTS: "🤖",
+  ORG_3D_PRINT: "🖨️",
   ORG_NEWS: "📰",
   ORG_AGENDA: "📅",
   ORG_NOTES: "📌",
@@ -124,6 +141,12 @@ const SCREEN_ICONS = {
 };
 
 function screenBadge(s, snap) {
+  if (s.type === "ORG_3D_PRINT") {
+    const p = snap.printer3d;
+    if (p && p.connected && p.state === "PRINTING") return `${p.progressPct}%`;
+    if (p && p.plugOn) return "⚡ON";
+    return "";
+  }
   if (s.type === "ORG_LIFE_INFRA") {
     const unread = (snap.comms?.slackUnread || 0) + (snap.comms?.missedCalls || 0) + (snap.comms?.voicemails || 0);
     return unread > 0 ? String(unread) : "";
@@ -151,7 +174,17 @@ function renderHud(snap) {
   const displayedId = snap.displayedScreen?.id;
   const enabledScreens = snap.screens.filter((s) => s.enabled);
 
-  const orgTypes = new Set(["ORG_OVERVIEW", "ORG_HOME", "ORG_LIFE_INFRA", "ORG_NEWS", "ORG_AGENDA", "ORG_NOTES", "ORG_CLOCK"]);
+  // Sync Top Theme Bar Buttons Active Class
+  document.querySelectorAll(".theme-pill-btn").forEach((btn) => {
+    const targetScreen = btn.getAttribute("data-screen");
+    if (targetScreen === displayedId) {
+      btn.classList.add("active");
+    } else {
+      btn.classList.remove("active");
+    }
+  });
+
+  const orgTypes = new Set(["ORG_OVERVIEW", "ORG_HOME", "ORG_LIFE_INFRA", "ORG_AGENTS", "ORG_3D_PRINT", "ORG_NEWS", "ORG_AGENDA", "ORG_NOTES", "ORG_CLOCK"]);
   const groups = [
     { title: "Quotidien & Maison", items: enabledScreens.filter((s) => orgTypes.has(s.type)) },
     { title: "Observabilité & Poste", items: enabledScreens.filter((s) => !orgTypes.has(s.type)) }
@@ -518,6 +551,7 @@ function renderStage(snap) {
   else if (screen.type === "ORG_HOME") renderOrgHome(stage, snap);
   else if (screen.type === "ORG_LIFE_INFRA") renderLifeInfra(stage, snap);
   else if (screen.type === "ORG_AGENTS") renderOrgAgents(stage, snap);
+  else if (screen.type === "ORG_3D_PRINT") renderOrg3DPrint(stage, snap);
   else if (screen.type === "ORG_NEWS") renderOrgNews(stage, snap);
   else if (screen.type === "ORG_STREAM_DECK") renderStreamDeck(stage, snap);
   else if (screen.type === "ORG_AGENDA") renderOrgAgenda(stage, snap);
@@ -862,6 +896,131 @@ function renderOrgAgents(stage, snap) {
       renderOrgAgents(stage, currentSnapshot || snap);
     };
   });
+}
+
+function renderOrg3DPrint(stage, snap) {
+  const p = snap.printer3d || {
+    connected: false,
+    state: "OFFLINE",
+    message: "Orchestrateur 3D Ender 3 / Klipper en attente",
+    progressPct: 0,
+    timeElapsedSecs: 0,
+    timeRemainingSecs: 0,
+    filename: "Aucun fichier",
+    nozzleTempC: 0,
+    nozzleTargetC: 0,
+    bedTempC: 0,
+    bedTargetC: 0,
+    plugOn: false,
+    powerW: 0
+  };
+
+  const isPrinting = p.state === "PRINTING";
+  const isReady = p.state === "READY" || p.state === "OPERATIONAL";
+  const stateColor = isPrinting ? "var(--primary)" : isReady ? "var(--ok)" : p.plugOn ? "var(--warn)" : "var(--muted)";
+
+  const elapsedMin = Math.floor(p.timeElapsedSecs / 60);
+  const remainingMin = Math.floor(p.timeRemainingSecs / 60);
+  const elapsedFmt = elapsedMin >= 60 ? `${Math.floor(elapsedMin / 60)}h ${elapsedMin % 60}m` : `${elapsedMin}m`;
+  const remainingFmt = remainingMin >= 60 ? `${Math.floor(remainingMin / 60)}h ${remainingMin % 60}m` : `${remainingMin}m`;
+
+  const nozzleHot = p.nozzleTempC >= 50;
+  const bedHot = p.bedTempC >= 45;
+
+  stage.innerHTML = `
+    <div class="org-view">
+      <div class="row" style="justify-content:space-between;margin-bottom:16px;">
+        <div>
+          <h2>🖨️ Impression 3D & Ender 3 (Klipper / Octo4a)</h2>
+          <div style="color:var(--muted);font-size:13px;">Cycle d'alimentation intelligent, surveillance thermique et progression en direct</div>
+        </div>
+        <div class="row" style="gap:8px;">
+          <button class="btn primary" id="btn-printer-refresh">↻ Synchroniser</button>
+        </div>
+      </div>
+
+      <div class="kpi-grid-4">
+        <div class="kpi-card">
+          <div class="kpi-label"><span>État & Cycle</span><span>⚡</span></div>
+          <div class="kpi-value" style="font-size:24px;color:${stateColor}">${escapeHtml(p.state || "STANDBY")}</div>
+          <div class="kpi-sub">${escapeHtml(p.message || "Prêt")}</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label"><span>Progression</span><span>🎯</span></div>
+          <div class="kpi-value" style="color:var(--primary);">${p.progressPct}%</div>
+          <div class="bar-track"><div class="bar-fill" style="width:${p.progressPct}%;background:var(--primary);"></div></div>
+          <div class="kpi-sub">${escapeHtml(p.filename || "—")}</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label"><span>Durée restante</span><span>⏳</span></div>
+          <div class="kpi-value" style="font-size:24px;">${p.timeRemainingSecs > 0 ? remainingFmt : (isPrinting ? "Calcul..." : "—")}</div>
+          <div class="kpi-sub">Écoulé : ${elapsedFmt}</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label"><span>Alimentation Prise</span><span>🔌</span></div>
+          <div class="kpi-value" style="color:${p.plugOn ? "var(--ok)" : "var(--muted)"};">${p.plugOn ? "ALLUMÉE" : "ÉTEINTE"}</div>
+          <div class="kpi-sub">${p.plugOn ? `${p.powerW} W instantanés` : "Hors tension sécurisé"}</div>
+        </div>
+      </div>
+
+      <div class="grid-2" style="margin-bottom:16px;">
+        <div class="card" style="display:flex;flex-direction:column;justify-content:space-between;">
+          <h3 style="margin-bottom:14px;">🌡️ Surveillance Thermique en Direct</h3>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px;">
+            <div class="thermal-box">
+              <div style="font-size:12px;color:var(--muted);font-weight:700;">BUSE (HOTEND)</div>
+              <div class="thermal-temp ${nozzleHot ? "hot" : p.nozzleTempC > 30 ? "warm" : "cold"}">${p.nozzleTempC}°C</div>
+              <div style="font-size:13px;color:var(--muted);">Consigne : <strong>${p.nozzleTargetC}°C</strong></div>
+            </div>
+            <div class="thermal-box">
+              <div style="font-size:12px;color:var(--muted);font-weight:700;">PLATEAU (BED)</div>
+              <div class="thermal-temp ${bedHot ? "hot" : p.bedTempC > 30 ? "warm" : "cold"}">${p.bedTempC}°C</div>
+              <div style="font-size:13px;color:var(--muted);">Consigne : <strong>${p.bedTargetC}°C</strong></div>
+            </div>
+          </div>
+          <div style="background:var(--bg);padding:12px;border-radius:12px;border:1px solid var(--border);font-size:13px;color:var(--muted);">
+            🛡️ <strong>Sécurité Extinction :</strong> L'extinction automatique attend que la buse et le plateau soient passés sous 50°C pour éviter tout bouchage thermique ou choc du filament.
+          </div>
+        </div>
+
+        <div class="card" style="display:flex;flex-direction:column;justify-content:space-between;">
+          <h3 style="margin-bottom:14px;">🎮 Pilotage & Actions Rapides</h3>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
+            <button class="btn ok" id="btn-print-power-on" style="padding:14px;font-size:14px;font-weight:700;">
+              ⚡ Allumer Imprimante
+            </button>
+            <button class="btn" id="btn-print-cooldown" style="padding:14px;font-size:14px;font-weight:700;border-color:#38bdf8;color:#38bdf8;">
+              ❄️ Refroidir & Couper
+            </button>
+            <button class="btn primary" id="btn-print-wake" style="padding:14px;font-size:14px;font-weight:700;">
+              🚀 Réveil & Impression
+            </button>
+            <button class="btn danger" id="btn-print-power-off" style="padding:14px;font-size:14px;font-weight:700;">
+              🛑 Forcer Coupure
+            </button>
+          </div>
+          <div style="background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.3);border-radius:10px;padding:12px;font-size:12px;color:var(--text);">
+            🎙️ <strong>Pilotage Vocal Meishi :</strong> Dites à tout moment <em>"Éteins l'imprimante 3D"</em> ou <em>"Quel est le temps restant sur l'impression ?"</em> depuis la tablette.
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const btnRefresh = document.getElementById("btn-printer-refresh");
+  if (btnRefresh) btnRefresh.onclick = () => api("/api/printer3d/status", "GET");
+
+  const btnOn = document.getElementById("btn-print-power-on");
+  if (btnOn) btnOn.onclick = () => api("/api/printer3d/power/on", "POST");
+
+  const btnCool = document.getElementById("btn-print-cooldown");
+  if (btnCool) btnCool.onclick = () => api("/api/printer3d/cooldown", "POST");
+
+  const btnOff = document.getElementById("btn-print-power-off");
+  if (btnOff) btnOff.onclick = () => api("/api/printer3d/power/off", "POST", { force: true });
+
+  const btnWake = document.getElementById("btn-print-wake");
+  if (btnWake) btnWake.onclick = () => api("/api/printer3d/wake-and-print", "POST");
 }
 
 let selectedNewsSource = "ALL";
@@ -1607,7 +1766,11 @@ function renderLifeInfra(stage, snap) {
           <h2>Vie Quotidienne, Kusanagi & Infra jo3</h2>
           <div style="color:var(--muted);font-size:13px;">Capteurs Kusanagi (Kubernetes, Proxmox, ArgoCD, Alertes), Téléphone, Alexa & ClearDrive</div>
         </div>
-        <button class="btn primary" id="btn-refresh-infra">↻ Actualiser Infra & Capteurs</button>
+        <div class="row" style="gap:8px;">
+          <button class="btn primary" id="btn-cluster-diag" title="Lancer un diagnostic complet du cluster jo3 via Amaraki">🩺 Diagnostic K8s</button>
+          <button class="btn" id="btn-cluster-remed" title="Détecter et corriger les dérives GitOps ArgoCD">🛠️ Remédier GitOps</button>
+          <button class="btn" id="btn-refresh-infra">↻ Actualiser</button>
+        </div>
       </div>
 
       <div class="kpi-grid-4">
@@ -1831,6 +1994,22 @@ function renderLifeInfra(stage, snap) {
   const btnAgentsInfra = document.getElementById("btn-infra-open-agents");
   if (btnAgentsInfra) {
     btnAgentsInfra.onclick = () => api("/api/screen/select", "POST", { target: "org-agents" });
+  }
+  const btnDiag = document.getElementById("btn-cluster-diag");
+  if (btnDiag) {
+    btnDiag.onclick = async () => {
+      btnDiag.textContent = "⏳ Diagnostic…";
+      await api("/api/cluster/diagnose", "POST");
+      btnDiag.textContent = "✓ Mission transmise";
+    };
+  }
+  const btnRemed = document.getElementById("btn-cluster-remed");
+  if (btnRemed) {
+    btnRemed.onclick = async () => {
+      btnRemed.textContent = "⏳ Remédiation…";
+      await api("/api/cluster/remediate", "POST");
+      btnRemed.textContent = "✓ Mission transmise";
+    };
   }
   document.getElementById("btn-refresh-infra").onclick = () => api("/api/org/refresh", "POST");
   const btnPveUpdate = document.getElementById("btn-proxmox-update");
@@ -2113,34 +2292,64 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-function closeModal(id) { document.getElementById(id).classList.remove("open"); }
+function openModal(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.add("open");
+}
 
-document.getElementById("btn-rotation").onclick = () => {
-  if (!currentSnapshot) return;
-  const s = { ...currentSnapshot.settings, rotationEnabled: !currentSnapshot.settings.rotationEnabled };
-  api("/api/settings", "POST", s);
-};
-document.getElementById("btn-reload").onclick = () => api("/api/reload", "POST");
-document.getElementById("btn-alert-ack").onclick = () => api("/api/alert/ack", "POST");
-document.getElementById("btn-alert-clear").onclick = () => api("/api/alert/clear", "POST");
-document.getElementById("btn-hide-hud").onclick = () => {
-  document.getElementById("hud").classList.add("hidden");
-  document.getElementById("btn-show-hud").classList.add("visible");
-  updateDashboardRenderResolution();
-};
-document.getElementById("btn-show-hud").onclick = () => {
-  document.getElementById("hud").classList.remove("hidden");
-  document.getElementById("btn-show-hud").classList.remove("visible");
-  updateDashboardRenderResolution();
-};
+function closeModal(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.remove("open");
+}
+
+const btnRotation = document.getElementById("btn-rotation");
+if (btnRotation) {
+  btnRotation.onclick = () => {
+    if (!currentSnapshot) return;
+    const s = { ...currentSnapshot.settings, rotationEnabled: !currentSnapshot.settings.rotationEnabled };
+    api("/api/settings", "POST", s);
+  };
+}
+
+const btnReload = document.getElementById("btn-reload");
+if (btnReload) btnReload.onclick = () => api("/api/reload", "POST");
+const btnAlertAck = document.getElementById("btn-alert-ack");
+if (btnAlertAck) btnAlertAck.onclick = () => api("/api/alert/ack", "POST");
+const btnAlertClear = document.getElementById("btn-alert-clear");
+if (btnAlertClear) btnAlertClear.onclick = () => api("/api/alert/clear", "POST");
+
+const btnHideHud = document.getElementById("btn-hide-hud");
+if (btnHideHud) {
+  btnHideHud.onclick = () => {
+    const hud = document.getElementById("hud");
+    const showBtn = document.getElementById("btn-show-hud");
+    if (hud) hud.classList.add("hidden");
+    if (showBtn) showBtn.classList.add("visible");
+    updateDashboardRenderResolution();
+  };
+}
+
+const btnShowHud = document.getElementById("btn-show-hud");
+if (btnShowHud) {
+  btnShowHud.onclick = () => {
+    const hud = document.getElementById("hud");
+    const showBtn = document.getElementById("btn-show-hud");
+    if (hud) hud.classList.remove("hidden");
+    if (showBtn) showBtn.classList.remove("visible");
+    updateDashboardRenderResolution();
+  };
+}
+
 const collapseBtn = document.getElementById("btn-collapse-sidebar");
 if (collapseBtn) {
   if (localStorage.getItem("iris_sidebar_collapsed") === "1") {
-    document.getElementById("hud").classList.add("collapsed");
+    const hud = document.getElementById("hud");
+    if (hud) hud.classList.add("collapsed");
     collapseBtn.textContent = "▶";
   }
   collapseBtn.onclick = () => {
     const hud = document.getElementById("hud");
+    if (!hud) return;
     const isCollapsed = hud.classList.toggle("collapsed");
     collapseBtn.textContent = isCollapsed ? "▶" : "◀";
     localStorage.setItem("iris_sidebar_collapsed", isCollapsed ? "1" : "0");
@@ -2154,76 +2363,255 @@ window.addEventListener("resize", () => {
   resizeRenderTimer = setTimeout(updateDashboardRenderResolution, 350);
 });
 
-document.getElementById("btn-screens").onclick = () => {
-  if (!currentSnapshot) return;
-  const list = document.getElementById("screens-list");
-  list.innerHTML = currentSnapshot.screens.map((s) => `
-    <div class="note-row">
-      <div><strong>${escapeHtml(s.name)}</strong> <span style="color:var(--primary);font-size:12px;">(${s.type})</span> ${s.isAlertTarget ? "⚠️" : ""}<div style="color:var(--muted);font-size:12px;">${escapeHtml(s.url || "")}</div></div>
-      <button class="btn danger" onclick="api('/api/screens/${encodeURIComponent(s.id)}','DELETE')">Suppr.</button>
-    </div>
-  `).join("");
-  document.getElementById("modal-screens").classList.add("open");
+const btnScreens = document.getElementById("btn-screens");
+if (btnScreens) {
+  btnScreens.onclick = () => {
+    if (!currentSnapshot) return;
+    const list = document.getElementById("screens-list");
+    if (list) {
+      list.innerHTML = currentSnapshot.screens.map((s) => `
+        <div class="note-row">
+          <div><strong>${escapeHtml(s.name)}</strong> <span style="color:var(--primary);font-size:12px;">(${s.type})</span> ${s.isAlertTarget ? "⚠️" : ""}<div style="color:var(--muted);font-size:12px;">${escapeHtml(s.url || "")}</div></div>
+          <button class="btn danger" onclick="api('/api/screens/${encodeURIComponent(s.id)}','DELETE')">Suppr.</button>
+        </div>
+      `).join("");
+    }
+    openModal("modal-screens");
+  };
+}
+
+const btnSaveScreen = document.getElementById("btn-save-screen");
+if (btnSaveScreen) {
+  btnSaveScreen.onclick = () => {
+    const idEl = document.getElementById("scr-id");
+    const nameEl = document.getElementById("scr-name");
+    const typeEl = document.getElementById("scr-type");
+    const urlEl = document.getElementById("scr-url");
+    const alertEl = document.getElementById("scr-alert");
+    const enabledEl = document.getElementById("scr-enabled");
+    const id = idEl ? idEl.value.trim() || `scr-${Date.now()}` : `scr-${Date.now()}`;
+    const name = nameEl ? nameEl.value.trim() || "Écran" : "Écran";
+    const type = typeEl ? typeEl.value : "WEB";
+    const url = urlEl ? urlEl.value.trim() : "";
+    const isAlertTarget = alertEl ? alertEl.checked : false;
+    const enabled = enabledEl ? enabledEl.checked : true;
+    api("/api/screens", "POST", { id, name, type, url, kioskMode: true, autoRefreshSeconds: 30, enabled, isAlertTarget });
+    closeModal("modal-screens");
+  };
+}
+
+const btnSettings = document.getElementById("btn-settings");
+if (btnSettings) {
+  btnSettings.onclick = () => {
+    if (!currentSnapshot) return;
+    const s = currentSnapshot.settings;
+    const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+    const setChk = (id, val) => { const el = document.getElementById(id); if (el) el.checked = !!val; };
+    setVal("cfg-host", s.mqtt.brokerHost);
+    setVal("cfg-port", s.mqtt.brokerPort);
+    setVal("cfg-device", s.mqtt.deviceId);
+    setVal("cfg-topic", s.mqtt.baseTopic);
+    setVal("cfg-rot-sec", s.rotationIntervalSeconds);
+    setVal("cfg-weather-city", s.org?.weatherCity || "Lyon");
+    setVal("cfg-ical-url", s.org?.icalUrl || "");
+    setVal("cfg-github-repos", (s.org?.githubRepos || []).join(", "));
+    setChk("cfg-mqtt-enabled", s.mqtt.enabled);
+    setChk("cfg-rot-enabled", s.rotationEnabled);
+    openModal("modal-settings");
+  };
+}
+
+const btnSaveSettings = document.getElementById("btn-save-settings");
+if (btnSaveSettings) {
+  btnSaveSettings.onclick = () => {
+    if (!currentSnapshot) return;
+    const s = structuredClone(currentSnapshot.settings);
+    const getVal = (id, fallback = "") => { const el = document.getElementById(id); return el ? el.value.trim() : fallback; };
+    const getChk = (id) => { const el = document.getElementById(id); return el ? el.checked : false; };
+    s.mqtt.brokerHost = getVal("cfg-host");
+    s.mqtt.brokerPort = parseInt(getVal("cfg-port", "1883"), 10) || 1883;
+    s.mqtt.deviceId = getVal("cfg-device", "tablet-1") || "tablet-1";
+    s.mqtt.baseTopic = getVal("cfg-topic", "iris") || "iris";
+    s.mqtt.enabled = getChk("cfg-mqtt-enabled");
+    s.rotationEnabled = getChk("cfg-rot-enabled");
+    s.rotationIntervalSeconds = parseInt(getVal("cfg-rot-sec", "45"), 10) || 45;
+    s.org = s.org || { weatherCity: "Lyon", weatherLat: "45.7640", weatherLon: "4.8357", icalUrl: "", githubRepos: [] };
+    s.org.weatherCity = getVal("cfg-weather-city", "Lyon") || "Lyon";
+    s.org.icalUrl = getVal("cfg-ical-url");
+    s.org.githubRepos = getVal("cfg-github-repos")
+      .split(",")
+      .map((r) => r.trim())
+      .filter(Boolean);
+    api("/api/settings", "POST", s);
+    closeModal("modal-settings");
+  };
+}
+
+const btnSimAlert = document.getElementById("btn-sim-alert");
+if (btnSimAlert) {
+  btnSimAlert.onclick = () => {
+    api("/api/alert/trigger", "POST", {
+      title: "Test Incident — OpenObserve / jo3",
+      message: "Bascule automatique vers le dashboard d'alerte.",
+      severity: "CRITICAL",
+      source: "simulation"
+    });
+    closeModal("modal-settings");
+  };
+}
+
+// ==================== ASSISTANT VOCAL MEISHI ====================
+let isListening = false;
+let speechRecognizer = null;
+let toastTimeout = null;
+
+function showVoiceToast(userText, agentReply, actionTag) {
+  const toast = document.getElementById("voice-feedback-toast");
+  const userEl = document.getElementById("voice-user-text");
+  const agentEl = document.getElementById("voice-agent-reply");
+  const tagEl = document.getElementById("voice-action-tag");
+  if (!toast || !userEl || !agentEl || !tagEl) return;
+
+  userEl.textContent = userText;
+  agentEl.textContent = agentReply;
+  tagEl.textContent = actionTag || "Meishi jo3";
+  toast.classList.add("visible");
+
+  if (toastTimeout) clearTimeout(toastTimeout);
+  toastTimeout = setTimeout(() => {
+    toast.classList.remove("visible");
+  }, 6000);
+}
+
+async function executeVoiceCommand(text) {
+  showVoiceToast(`👤 "${text}"`, "Traitement en cours...", "Meishi jo3");
+
+  try {
+    const res = await api("/api/voice/intent", "POST", { text });
+    if (res && res.spokenReply) {
+      showVoiceToast(`👤 "${text}"`, `🤖 ${res.spokenReply}`, res.intentType || "Meishi jo3");
+
+      if ("speechSynthesis" in window) {
+        try {
+          window.speechSynthesis.cancel();
+          const utter = new SpeechSynthesisUtterance(res.spokenReply);
+          utter.lang = "fr-FR";
+          utter.rate = 1.05;
+          window.speechSynthesis.speak(utter);
+        } catch (e) {
+          console.warn("TTS error:", e);
+        }
+      }
+    }
+  } catch (err) {
+    showVoiceToast(`👤 "${text}"`, `Erreur: ${err.message}`, "Erreur");
+  }
+}
+
+window.sendVoicePrompt = function(promptText) {
+  closeModal("modal-voice");
+  executeVoiceCommand(promptText);
 };
 
-document.getElementById("btn-save-screen").onclick = () => {
-  const id = document.getElementById("scr-id").value.trim() || `scr-${Date.now()}`;
-  const name = document.getElementById("scr-name").value.trim() || "Écran";
-  const type = document.getElementById("scr-type").value;
-  const url = document.getElementById("scr-url").value.trim();
-  const isAlertTarget = document.getElementById("scr-alert").checked;
-  const enabled = document.getElementById("scr-enabled").checked;
-  api("/api/screens", "POST", { id, name, type, url, kioskMode: true, autoRefreshSeconds: 30, enabled, isAlertTarget });
-  closeModal("modal-screens");
-};
+function initVoiceAssistant() {
+  const micBtn = document.getElementById("btn-meishi-mic");
+  const btnOpenModal = document.getElementById("btn-open-voice-modal");
+  const btnSendText = document.getElementById("btn-send-voice-text");
+  const inputVoice = document.getElementById("input-voice-text");
 
-document.getElementById("btn-settings").onclick = () => {
-  if (!currentSnapshot) return;
-  const s = currentSnapshot.settings;
-  document.getElementById("cfg-host").value = s.mqtt.brokerHost;
-  document.getElementById("cfg-port").value = s.mqtt.brokerPort;
-  document.getElementById("cfg-device").value = s.mqtt.deviceId;
-  document.getElementById("cfg-topic").value = s.mqtt.baseTopic;
-  document.getElementById("cfg-rot-sec").value = s.rotationIntervalSeconds;
-  document.getElementById("cfg-weather-city").value = s.org?.weatherCity || "Lyon";
-  document.getElementById("cfg-ical-url").value = s.org?.icalUrl || "";
-  document.getElementById("cfg-github-repos").value = (s.org?.githubRepos || []).join(", ");
-  document.getElementById("cfg-mqtt-enabled").checked = s.mqtt.enabled;
-  document.getElementById("cfg-rot-enabled").checked = s.rotationEnabled;
-  document.getElementById("modal-settings").classList.add("open");
-};
+  if (btnOpenModal) {
+    btnOpenModal.onclick = () => openModal("modal-voice");
+  }
 
-document.getElementById("btn-save-settings").onclick = () => {
-  if (!currentSnapshot) return;
-  const s = structuredClone(currentSnapshot.settings);
-  s.mqtt.brokerHost = document.getElementById("cfg-host").value.trim();
-  s.mqtt.brokerPort = parseInt(document.getElementById("cfg-port").value, 10) || 1883;
-  s.mqtt.deviceId = document.getElementById("cfg-device").value.trim() || "tablet-1";
-  s.mqtt.baseTopic = document.getElementById("cfg-topic").value.trim() || "iris";
-  s.mqtt.enabled = document.getElementById("cfg-mqtt-enabled").checked;
-  s.rotationEnabled = document.getElementById("cfg-rot-enabled").checked;
-  s.rotationIntervalSeconds = parseInt(document.getElementById("cfg-rot-sec").value, 10) || 45;
-  s.org = s.org || { weatherCity: "Lyon", weatherLat: "45.7640", weatherLon: "4.8357", icalUrl: "", githubRepos: [] };
-  s.org.weatherCity = document.getElementById("cfg-weather-city").value.trim() || "Lyon";
-  s.org.icalUrl = document.getElementById("cfg-ical-url").value.trim();
-  s.org.githubRepos = document
-    .getElementById("cfg-github-repos")
-    .value.split(",")
-    .map((r) => r.trim())
-    .filter(Boolean);
-  api("/api/settings", "POST", s);
-  closeModal("modal-settings");
-};
+  if (btnSendText && inputVoice) {
+    btnSendText.onclick = () => {
+      const text = inputVoice.value.trim();
+      if (text) {
+        closeModal("modal-voice");
+        inputVoice.value = "";
+        executeVoiceCommand(text);
+      }
+    };
+    inputVoice.onkeydown = (e) => {
+      if (e.key === "Enter") {
+        const text = inputVoice.value.trim();
+        if (text) {
+          closeModal("modal-voice");
+          inputVoice.value = "";
+          executeVoiceCommand(text);
+        }
+      }
+    };
+  }
 
-document.getElementById("btn-sim-alert").onclick = () => {
-  api("/api/alert/trigger", "POST", {
-    title: "Test Incident — OpenObserve / jo3",
-    message: "Bascule automatique vers le dashboard d'alerte.",
-    severity: "CRITICAL",
-    source: "simulation"
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (SpeechRecognition) {
+    try {
+      speechRecognizer = new SpeechRecognition();
+      speechRecognizer.lang = "fr-FR";
+      speechRecognizer.interimResults = false;
+      speechRecognizer.maxAlternatives = 1;
+
+      speechRecognizer.onstart = () => {
+        isListening = true;
+        if (micBtn) micBtn.classList.add("listening");
+        showVoiceToast("🎙️ Écoute...", "Parlez maintenant", "Meishi Active");
+      };
+
+      speechRecognizer.onresult = (event) => {
+        const transcript = event.results[0][0].transcript;
+        if (transcript) {
+          executeVoiceCommand(transcript);
+        }
+      };
+
+      speechRecognizer.onerror = (event) => {
+        console.warn("Speech recognition error:", event.error);
+        isListening = false;
+        if (micBtn) micBtn.classList.remove("listening");
+        if (event.error !== "no-speech") {
+          showVoiceToast("⚠️ Reconnaissance", `Erreur micro: ${event.error}`, "Micro");
+        }
+      };
+
+      speechRecognizer.onend = () => {
+        isListening = false;
+        if (micBtn) micBtn.classList.remove("listening");
+      };
+    } catch (e) {
+      console.warn("Speech recognition init exception:", e);
+    }
+  }
+
+  if (micBtn) {
+    micBtn.onclick = () => {
+      if (speechRecognizer) {
+        if (isListening) {
+          speechRecognizer.stop();
+        } else {
+          try {
+            speechRecognizer.start();
+          } catch (e) {
+            console.warn("Speech recognition start failed:", e);
+            openModal("modal-voice");
+          }
+        }
+      } else {
+        openModal("modal-voice");
+      }
+    };
+  }
+
+  // Connect Top Theme Bar Buttons
+  document.querySelectorAll(".theme-pill-btn").forEach((btn) => {
+    btn.onclick = () => {
+      const screenId = btn.getAttribute("data-screen");
+      if (screenId) {
+        api("/api/screen/select", "POST", { target: screenId });
+      }
+    };
   });
-  closeModal("modal-settings");
-};
+}
 
 if (!clockTimer) {
   clockTimer = setInterval(() => {
@@ -2234,4 +2622,60 @@ if (!clockTimer) {
   }, 1000);
 }
 
-connectWs();
+// ==================== TABLET WAKE LOCK & APP INIT ====================
+let screenWakeLock = null;
+async function requestWakeLock() {
+  if ("wakeLock" in navigator) {
+    try {
+      screenWakeLock = await navigator.wakeLock.request("screen");
+      screenWakeLock.addEventListener("release", () => {
+        screenWakeLock = null;
+      });
+      console.log("Iris: Screen Wake Lock active (tablet display will stay awake).");
+    } catch (err) {
+      console.warn("Iris: Screen Wake Lock error:", err);
+    }
+  }
+}
+
+if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && !screenWakeLock) {
+      requestWakeLock();
+    }
+  });
+}
+
+async function initIris() {
+  window.addEventListener("error", (e) => {
+    console.error("Iris unhandled error:", e.error || e.message);
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    console.error("Iris unhandled promise rejection:", e.reason);
+  });
+
+  try {
+    const snap = await api("/api/state");
+    if (snap && snap.screens) {
+      currentSnapshot = snap;
+      render(snap);
+    }
+  } catch (err) {
+    console.warn("Initial state fetch error:", err);
+  }
+
+  try {
+    initVoiceAssistant();
+  } catch (err) {
+    console.warn("Voice assistant init error:", err);
+  }
+
+  connectWs();
+  requestWakeLock();
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initIris);
+} else {
+  initIris();
+}

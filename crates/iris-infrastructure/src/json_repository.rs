@@ -192,6 +192,16 @@ impl JsonFileRepository {
                 is_alert_target: false,
             },
             DisplayScreen {
+                id: "org-3d-print".to_string(),
+                name: "Impression 3D & Ender".to_string(),
+                screen_type: ScreenType::Org3DPrint,
+                url: String::new(),
+                kiosk_mode: true,
+                auto_refresh_seconds: 0,
+                enabled: true,
+                is_alert_target: false,
+            },
+            DisplayScreen {
                 id: "o2-overview".to_string(),
                 name: "OpenObserve".to_string(),
                 screen_type: ScreenType::OpenObserve,
@@ -342,6 +352,25 @@ impl StateRepository for JsonFileRepository {
                             id: "org-agents".to_string(),
                             name: "Agents & Upgrades".to_string(),
                             screen_type: ScreenType::OrgAgents,
+                            url: String::new(),
+                            kiosk_mode: true,
+                            auto_refresh_seconds: 0,
+                            enabled: true,
+                            is_alert_target: false,
+                        },
+                    );
+                }
+                if !state
+                    .screens
+                    .iter()
+                    .any(|s| s.screen_type == ScreenType::Org3DPrint)
+                {
+                    state.screens.insert(
+                        4.min(state.screens.len()),
+                        DisplayScreen {
+                            id: "org-3d-print".to_string(),
+                            name: "Impression 3D & Ender".to_string(),
+                            screen_type: ScreenType::Org3DPrint,
                             url: String::new(),
                             kiosk_mode: true,
                             auto_refresh_seconds: 0,

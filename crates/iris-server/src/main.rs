@@ -52,10 +52,17 @@ async fn main() -> anyhow::Result<()> {
         std::time::Duration::from_secs(60),
     );
 
+    let ender = Arc::new(iris_infrastructure::EnderClient::from_env());
+    let slack = Arc::new(iris_infrastructure::SlackClient::from_env());
+    let amaraki = Arc::new(iris_infrastructure::AmarakiClient::from_env());
+
     let app_state = AppState {
         controller,
         mqtt,
         renderer,
+        ender,
+        slack,
+        amaraki,
     };
 
     let app = api_router(app_state)
