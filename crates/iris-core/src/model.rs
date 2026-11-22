@@ -204,7 +204,7 @@ impl Default for IrisSettings {
         Self {
             mqtt: MqttConfig::default(),
             org: OrgConfig::default(),
-            rotation_enabled: true,
+            rotation_enabled: false,
             rotation_interval_seconds: default_rotation_interval(),
             keep_screen_on: true,
             immersive_fullscreen: true,

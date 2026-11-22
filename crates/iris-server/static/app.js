@@ -2,6 +2,13 @@ let currentSnapshot = null;
 let lastRenderedKey = null;
 let clockTimer = null;
 let dashboardAutoRefreshTimer = null;
+let activeViewMode = "SCREEN";
+
+function openConfigView() {
+  activeViewMode = "CONFIG";
+  lastRenderedKey = null;
+  if (currentSnapshot) render(currentSnapshot);
+}
 
 function getRenderViewportSize() {
   const hud = document.getElementById("hud");
@@ -177,12 +184,17 @@ function renderHud(snap) {
   // Sync Top Theme Bar Buttons Active Class
   document.querySelectorAll(".theme-pill-btn").forEach((btn) => {
     const targetScreen = btn.getAttribute("data-screen");
-    if (targetScreen === displayedId) {
+    if (activeViewMode === "SCREEN" && targetScreen === displayedId) {
       btn.classList.add("active");
     } else {
       btn.classList.remove("active");
     }
   });
+
+  const configMenuBtn = document.getElementById("btn-config-menu");
+  if (configMenuBtn) {
+    configMenuBtn.classList.toggle("active", activeViewMode === "CONFIG");
+  }
 
   const orgTypes = new Set(["ORG_OVERVIEW", "ORG_HOME", "ORG_LIFE_INFRA", "ORG_AGENTS", "ORG_3D_PRINT", "ORG_NEWS", "ORG_AGENDA", "ORG_NOTES", "ORG_CLOCK"]);
   const groups = [
@@ -197,7 +209,7 @@ function renderHud(snap) {
     sec.innerHTML = `<div class="nav-section-title">${escapeHtml(grp.title)}</div>`;
     grp.items.forEach((s) => {
       const b = document.createElement("button");
-      const isActive = s.id === displayedId && !snap.transientScreen;
+      const isActive = activeViewMode === "SCREEN" && s.id === displayedId && !snap.transientScreen;
       b.className = "nav-item" + (isActive ? " active" : "");
       b.title = s.name;
       const icon = SCREEN_ICONS[s.type] || "🖥️";
@@ -207,7 +219,10 @@ function renderHud(snap) {
         <span class="nav-text">${escapeHtml(s.name)}</span>
         ${badge ? `<span class="nav-badge">${escapeHtml(badge)}</span>` : ""}
       `;
-      b.onclick = () => api("/api/screen/select", "POST", { target: s.id });
+      b.onclick = () => {
+        activeViewMode = "SCREEN";
+        api("/api/screen/select", "POST", { target: s.id });
+      };
       sec.appendChild(b);
     });
     pills.appendChild(sec);
@@ -292,8 +307,14 @@ const OPENOBSERVE_DASHBOARDS = [
 ];
 
 function renderStage(snap) {
-  const screen = snap.displayedScreen;
   const stage = document.getElementById("stage");
+  if (activeViewMode === "CONFIG") {
+    stopDashboardAutoRefresh();
+    lastRenderedKey = null;
+    renderConfigPage(stage, snap);
+    return;
+  }
+  const screen = snap.displayedScreen;
   if (!screen) {
     stopDashboardAutoRefresh();
     stage.innerHTML = `<div class="org-view"><h2>Aucun écran configuré</h2></div>`;
@@ -2214,7 +2235,7 @@ function renderOrgAgenda(stage, snap) {
   document.getElementById("btn-org-refresh").onclick = () => api("/api/org/refresh", "POST");
   const openCfgBtn = document.getElementById("btn-agenda-open-settings");
   if (openCfgBtn) {
-    openCfgBtn.onclick = () => document.getElementById("btn-settings").click();
+    openCfgBtn.onclick = () => openConfigView();
   }
   document.querySelectorAll(".week-day").forEach((col) => {
     col.onclick = (ev) => {
@@ -2289,6 +2310,200 @@ function renderOrgClock(stage) {
       <div class="date-sub">${now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</div>
     </div>
   `;
+}
+
+function renderConfigPage(stage, snap) {
+  const s = snap.settings || {};
+  const mqtt = s.mqtt || {};
+  const org = s.org || {};
+  const rotActive = !!s.rotationEnabled;
+  const screens = snap.screens || [];
+
+  stage.innerHTML = `
+    <div class="org-view">
+      <div class="row" style="justify-content:space-between;margin-bottom:16px;">
+        <div>
+          <h2>⚙️ Configuration Générale Iris</h2>
+          <div style="color:var(--muted);font-size:13px;">Rotation des écrans, mode kiosk, intégrations (MQTT, Météo, Calendrier, GitHub) et gestion des écrans</div>
+        </div>
+        <div class="row" style="gap:8px;">
+          <button class="btn" id="cfg-page-reload">↻ Actualiser les flux</button>
+          <button class="btn" id="cfg-page-fullscreen">⛶ Mode Kiosk Plein Écran</button>
+        </div>
+      </div>
+
+      <div class="kpi-grid-4" style="margin-bottom:16px;">
+        <div class="kpi-card">
+          <div class="kpi-label"><span>Rotation Automatique</span><span>🔄</span></div>
+          <div class="kpi-value" style="font-size:22px;color:${rotActive ? "var(--ok)" : "var(--warn)"};">${rotActive ? "ACTIVE" : "EN PAUSE"}</div>
+          <div class="row" style="margin-top:10px;gap:8px;">
+            <button class="btn ${rotActive ? "danger" : "primary"}" id="cfg-page-toggle-rot">${rotActive ? "⏸️ Mettre en pause" : "▶️ Activer"}</button>
+          </div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label"><span>Broker MQTT</span><span>📡</span></div>
+          <div class="kpi-value" style="font-size:20px;color:${snap.mqttState === "CONNECTED" ? "var(--ok)" : "var(--warn)"};">${escapeHtml(snap.mqttState || "OFFLINE")}</div>
+          <div class="kpi-sub">${escapeHtml(mqtt.brokerHost || "—")}:${mqtt.brokerPort || 1883}</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label"><span>Écrans Actifs</span><span>🖥️</span></div>
+          <div class="kpi-value">${screens.filter((x) => x.enabled).length} / ${screens.length}</div>
+          <div class="kpi-sub">Intervalle : ${s.rotationIntervalSeconds || 45}s</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label"><span>Test Alerte</span><span>🚨</span></div>
+          <div class="kpi-sub" style="margin-bottom:10px;">Vérifier le basculement sur alerte critique</div>
+          <button class="btn danger" id="cfg-page-sim-alert">Simuler un incident</button>
+        </div>
+      </div>
+
+      <div class="grid-2" style="height:auto;align-items:start;">
+        <div class="card">
+          <h3 style="margin-bottom:14px;">🔌 Réglages & Intégrations</h3>
+          <div class="row" style="gap:10px;">
+            <div class="field" style="flex:2"><label>Broker MQTT Host</label><input id="cfgp-host" value="${escapeHtml(mqtt.brokerHost || "")}" /></div>
+            <div class="field" style="flex:1"><label>Port</label><input id="cfgp-port" type="number" value="${mqtt.brokerPort || 1883}" /></div>
+          </div>
+          <div class="row" style="gap:10px;">
+            <div class="field" style="flex:1"><label>Device ID</label><input id="cfgp-device" value="${escapeHtml(mqtt.deviceId || "tablet-1")}" /></div>
+            <div class="field" style="flex:1"><label>Base Topic</label><input id="cfgp-topic" value="${escapeHtml(mqtt.baseTopic || "iris")}" /></div>
+            <div class="field" style="flex:1"><label>Rotation (sec)</label><input id="cfgp-rot-sec" type="number" value="${s.rotationIntervalSeconds || 45}" /></div>
+          </div>
+          <div class="row" style="gap:10px;">
+            <div class="field" style="flex:1"><label>Ville Météo</label><input id="cfgp-weather-city" value="${escapeHtml(org.weatherCity || "Lyon")}" /></div>
+            <div class="field" style="flex:2"><label>URL Calendrier iCal (.ics)</label><input id="cfgp-ical-url" value="${escapeHtml(org.icalUrl || "")}" placeholder="https://calendar.google.com/calendar/ical/.../basic.ics" /></div>
+          </div>
+          <div class="field"><label>Dépôts GitHub suivis (séparés par virgule)</label><input id="cfgp-github-repos" value="${escapeHtml((org.githubRepos || []).join(", "))}" /></div>
+          <div class="row" style="margin-bottom:14px;gap:16px;">
+            <label><input type="checkbox" id="cfgp-mqtt-enabled" ${mqtt.enabled ? "checked" : ""} /> MQTT actif</label>
+            <label><input type="checkbox" id="cfgp-rot-enabled" ${rotActive ? "checked" : ""} /> Rotation automatique des dashboards</label>
+          </div>
+          <button class="btn primary" id="cfgp-save-settings">💾 Enregistrer la configuration</button>
+        </div>
+
+        <div class="card">
+          <h3 style="margin-bottom:14px;">🖥️ Gestion des Écrans & Dashboards</h3>
+          <div style="display:flex;flex-direction:column;gap:8px;max-height:320px;overflow-y:auto;margin-bottom:16px;">
+            ${screens.map((scr) => `
+              <div class="note-row">
+                <div style="min-width:0;flex:1;">
+                  <strong>${escapeHtml(scr.name)}</strong>
+                  <span style="color:var(--primary);font-size:12px;">(${escapeHtml(scr.type)})</span>
+                  ${scr.isAlertTarget ? " ⚠️" : ""}
+                  ${scr.enabled ? '<span style="color:var(--ok);font-size:11px;margin-left:6px;">● Actif</span>' : '<span style="color:var(--muted);font-size:11px;margin-left:6px;">○ Masqué</span>'}
+                  <div style="color:var(--muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(scr.url || "Vue native Iris")}</div>
+                </div>
+                <div class="row" style="gap:6px;flex-shrink:0;">
+                  <button class="btn cfgp-show-scr" data-id="${escapeHtml(scr.id)}">👁️</button>
+                  <button class="btn cfgp-toggle-scr" data-id="${escapeHtml(scr.id)}">${scr.enabled ? "Masquer" : "Activer"}</button>
+                  <button class="btn danger cfgp-del-scr" data-id="${escapeHtml(scr.id)}">Suppr.</button>
+                </div>
+              </div>
+            `).join("")}
+          </div>
+
+          <h4 style="margin-bottom:10px;color:var(--primary);">➕ Ajouter / Modifier un écran</h4>
+          <div class="row" style="gap:10px;">
+            <div class="field" style="flex:1"><label>ID</label><input id="cfgp-scr-id" placeholder="grafana-custom" /></div>
+            <div class="field" style="flex:2"><label>Nom</label><input id="cfgp-scr-name" placeholder="Mon Dashboard" /></div>
+          </div>
+          <div class="row" style="gap:10px;">
+            <div class="field" style="flex:1">
+              <label>Type</label>
+              <select id="cfgp-scr-type">
+                <option value="OPEN_OBSERVE">OpenObserve</option>
+                <option value="GRAFANA">Grafana</option>
+                <option value="WEB">Web / URL</option>
+                <option value="ORG_OVERVIEW">Org — Hub</option>
+                <option value="ORG_HOME">Maison & Énergie</option>
+                <option value="ORG_LIFE_INFRA">Vie Quotidienne & Infra</option>
+                <option value="ORG_NEWS">Actualités Kusanagi</option>
+                <option value="ORG_AGENTS">Rapports Agents & Upgrades</option>
+                <option value="ORG_3D_PRINT">Impression 3D & Ender</option>
+                <option value="ORG_STREAM_DECK">Stream Deck & PC</option>
+                <option value="ORG_AGENDA">Org — Planning & Mails</option>
+                <option value="ORG_NOTES">Org — Notes</option>
+                <option value="ORG_CLOCK">Org — Horloge</option>
+              </select>
+            </div>
+            <div class="field" style="flex:2"><label>URL</label><input id="cfgp-scr-url" placeholder="https://..." /></div>
+          </div>
+          <div class="row" style="margin-bottom:12px;gap:16px;">
+            <label><input type="checkbox" id="cfgp-scr-alert" /> Écran d'alerte</label>
+            <label><input type="checkbox" id="cfgp-scr-enabled" checked /> Activé</label>
+          </div>
+          <button class="btn primary" id="cfgp-save-screen">Enregistrer l'écran</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.getElementById("cfg-page-reload").onclick = () => api("/api/reload", "POST");
+  document.getElementById("cfg-page-fullscreen").onclick = () => {
+    const hud = document.getElementById("hud");
+    const showBtn = document.getElementById("btn-show-hud");
+    if (hud) hud.classList.add("hidden");
+    if (showBtn) showBtn.classList.add("visible");
+    updateDashboardRenderResolution();
+  };
+  document.getElementById("cfg-page-toggle-rot").onclick = () => {
+    const next = { ...s, rotationEnabled: !rotActive };
+    api("/api/settings", "POST", next);
+  };
+  document.getElementById("cfg-page-sim-alert").onclick = () => {
+    api("/api/alert/trigger", "POST", {
+      title: "Test Incident — OpenObserve / jo3",
+      message: "Bascule automatique vers le dashboard d'alerte.",
+      severity: "CRITICAL",
+      source: "simulation"
+    });
+  };
+  document.getElementById("cfgp-save-settings").onclick = async () => {
+    const next = structuredClone(s);
+    next.mqtt = next.mqtt || {};
+    next.mqtt.brokerHost = document.getElementById("cfgp-host").value.trim();
+    next.mqtt.brokerPort = parseInt(document.getElementById("cfgp-port").value, 10) || 1883;
+    next.mqtt.deviceId = document.getElementById("cfgp-device").value.trim() || "tablet-1";
+    next.mqtt.baseTopic = document.getElementById("cfgp-topic").value.trim() || "iris";
+    next.mqtt.enabled = document.getElementById("cfgp-mqtt-enabled").checked;
+    next.rotationEnabled = document.getElementById("cfgp-rot-enabled").checked;
+    next.rotationIntervalSeconds = parseInt(document.getElementById("cfgp-rot-sec").value, 10) || 45;
+    next.org = next.org || { weatherCity: "Lyon", weatherLat: "45.7640", weatherLon: "4.8357", icalUrl: "", githubRepos: [] };
+    next.org.weatherCity = document.getElementById("cfgp-weather-city").value.trim() || "Lyon";
+    next.org.icalUrl = document.getElementById("cfgp-ical-url").value.trim();
+    next.org.githubRepos = document.getElementById("cfgp-github-repos").value.split(",").map((r) => r.trim()).filter(Boolean);
+    await api("/api/settings", "POST", next);
+    const saveBtn = document.getElementById("cfgp-save-settings");
+    if (saveBtn) {
+      saveBtn.textContent = "✓ Configuration enregistrée";
+      setTimeout(() => { saveBtn.textContent = "💾 Enregistrer la configuration"; }, 1500);
+    }
+  };
+  document.getElementById("cfgp-save-screen").onclick = () => {
+    const id = document.getElementById("cfgp-scr-id").value.trim() || `scr-${Date.now()}`;
+    const name = document.getElementById("cfgp-scr-name").value.trim() || "Écran";
+    const type = document.getElementById("cfgp-scr-type").value;
+    const url = document.getElementById("cfgp-scr-url").value.trim();
+    const isAlertTarget = document.getElementById("cfgp-scr-alert").checked;
+    const enabled = document.getElementById("cfgp-scr-enabled").checked;
+    api("/api/screens", "POST", { id, name, type, url, kioskMode: true, autoRefreshSeconds: 30, enabled, isAlertTarget });
+  };
+
+  stage.querySelectorAll(".cfgp-show-scr").forEach((btn) => {
+    btn.onclick = () => {
+      activeViewMode = "SCREEN";
+      api("/api/screen/select", "POST", { target: btn.getAttribute("data-id") });
+    };
+  });
+  stage.querySelectorAll(".cfgp-toggle-scr").forEach((btn) => {
+    btn.onclick = () => {
+      const target = screens.find((x) => x.id === btn.getAttribute("data-id"));
+      if (target) api("/api/screens", "POST", { ...target, enabled: !target.enabled });
+    };
+  });
+  stage.querySelectorAll(".cfgp-del-scr").forEach((btn) => {
+    btn.onclick = () => api(`/api/screens/${encodeURIComponent(btn.getAttribute("data-id"))}`, "DELETE");
+  });
 }
 
 function escapeHtml(s) {
@@ -2605,11 +2820,17 @@ function initVoiceAssistant() {
     };
   }
 
+  const btnConfigMenu = document.getElementById("btn-config-menu");
+  if (btnConfigMenu) {
+    btnConfigMenu.onclick = () => openConfigView();
+  }
+
   // Connect Top Theme Bar Buttons
   document.querySelectorAll(".theme-pill-btn").forEach((btn) => {
     btn.onclick = () => {
       const screenId = btn.getAttribute("data-screen");
       if (screenId) {
+        activeViewMode = "SCREEN";
         api("/api/screen/select", "POST", { target: screenId });
       }
     };
