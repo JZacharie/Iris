@@ -922,129 +922,571 @@ function renderOrgAgents(stage, snap) {
   });
 }
 
+let printer3dPollTimer = null;
+let printer3dCameraMode = "SNAPSHOT"; // "SNAPSHOT" or "MJPEG"
+let printer3dActionFeedback = "";
+
+function stopPrinter3dPolling() {
+  if (printer3dPollTimer) {
+    clearInterval(printer3dPollTimer);
+    printer3dPollTimer = null;
+  }
+}
+
+function startPrinter3dPolling() {
+  stopPrinter3dPolling();
+  printer3dPollTimer = setInterval(() => {
+    const displayed = currentSnapshot?.displayedScreen;
+    if (activeViewMode !== "SCREEN" || !displayed || (displayed.type !== "ORG_3D_PRINT" && displayed.type !== "ORG3_D_PRINT")) {
+      stopPrinter3dPolling();
+      return;
+    }
+    api("/api/printer3d/status", "GET").catch(() => {});
+    const camImg = document.getElementById("printer3d-webcam-img");
+    if (camImg && printer3dCameraMode === "SNAPSHOT") {
+      camImg.src = `/api/printer3d/camera/snapshot?t=${Date.now()}`;
+    }
+  }, 5000);
+}
+
+function formatPrintDuration(secs) {
+  const s = Math.max(0, Math.round(Number(secs) || 0));
+  if (s === 0) return "—";
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const remS = s % 60;
+  if (h > 0) return `${h}h ${String(m).padStart(2, "0")}m`;
+  if (m > 0) return `${m}m ${String(remS).padStart(2, "0")}s`;
+  return `${remS}s`;
+}
+
+function formatPrintEta(remainingSecs) {
+  const s = Math.max(0, Math.round(Number(remainingSecs) || 0));
+  if (s <= 0) return "—";
+  const eta = new Date(Date.now() + s * 1000);
+  return eta.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatBytesSize(bytes) {
+  const b = Number(bytes) || 0;
+  if (b <= 0) return "—";
+  if (b >= 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(2)} Mo`;
+  if (b >= 1024) return `${(b / 1024).toFixed(1)} Ko`;
+  return `${b} o`;
+}
+
+function formatCleanPartName(filename) {
+  if (!filename || filename === "Aucun fichier") return "Aucune pièce chargée";
+  return filename
+    .replace(/\.gcode$/i, "")
+    .replace(/_/g, " ");
+}
+
 function renderOrg3DPrint(stage, snap) {
+  startPrinter3dPolling();
+
   const p = snap.printer3d || {
     connected: false,
     state: "OFFLINE",
-    message: "Orchestrateur 3D Ender 3 / Klipper en attente",
+    message: "Connexion à OctoPrint (192.168.0.107:5000) en cours…",
     progressPct: 0,
+    progressExact: "0.0",
     timeElapsedSecs: 0,
     timeRemainingSecs: 0,
-    filename: "Aucun fichier",
+    estimatedTotalSecs: 0,
+    filename: "",
+    displayName: "",
+    fileSizeBytes: 0,
+    filePosBytes: 0,
+    user: "zacharie",
+    slicer: "",
+    filamentLengthM: "",
+    filamentVolumeCm3: "",
+    filamentWeightG: "",
+    modelWidthMm: "",
+    modelDepthMm: "",
+    modelHeightMm: "",
+    totalLayers: 0,
+    currentLayer: 0,
+    currentZMm: "",
+    thumbnailDataUrl: null,
+    webcamAvailable: false,
+    octoprintUrl: "http://192.168.0.107:5000",
+    octoprintVersion: "OctoPrint",
+    printerPort: "/tmp/printer",
+    autoShutdownEnabled: true,
     nozzleTempC: 0,
     nozzleTargetC: 0,
     bedTempC: 0,
     bedTargetC: 0,
     plugOn: false,
-    powerW: 0
+    powerW: 0,
+    recentFiles: [],
+    logs: []
   };
 
-  const isPrinting = p.state === "PRINTING";
-  const isReady = p.state === "READY" || p.state === "OPERATIONAL";
-  const stateColor = isPrinting ? "var(--primary)" : isReady ? "var(--ok)" : p.plugOn ? "var(--warn)" : "var(--muted)";
+  // Trigger immediate initial fetch if printer3d has not been populated yet
+  if (!snap.printer3d) {
+    api("/api/printer3d/status", "GET").catch(() => {});
+  }
 
-  const elapsedMin = Math.floor(p.timeElapsedSecs / 60);
-  const remainingMin = Math.floor(p.timeRemainingSecs / 60);
-  const elapsedFmt = elapsedMin >= 60 ? `${Math.floor(elapsedMin / 60)}h ${elapsedMin % 60}m` : `${elapsedMin}m`;
-  const remainingFmt = remainingMin >= 60 ? `${Math.floor(remainingMin / 60)}h ${remainingMin % 60}m` : `${remainingMin}m`;
+  const rawState = (p.state || "STANDBY").toUpperCase();
+  const isPrinting = rawState === "PRINTING";
+  const isPaused = rawState === "PAUSED";
+  const isCooling = rawState === "COOLING_DOWN";
+  const isReady = rawState === "READY" || rawState === "OPERATIONAL" || rawState === "RUNNING";
+  const stateColor = isPrinting
+    ? "var(--primary)"
+    : isPaused
+    ? "var(--warn)"
+    : isCooling
+    ? "#38bdf8"
+    : isReady
+    ? "var(--ok)"
+    : p.plugOn
+    ? "var(--warn)"
+    : "var(--muted)";
+
+  const stateLabel = {
+    PRINTING: "🖨️ EN IMPRESSION",
+    PAUSED: "⏸️ EN PAUSE",
+    OPERATIONAL: "✅ PRÊTE (KLIPPER)",
+    READY: "✅ PRÊTE",
+    COOLING_DOWN: "❄️ REFROIDISSEMENT",
+    POWER_OFF: "🔌 ÉTEINTE",
+    OFFLINE: "⚠️ HORS LIGNE"
+  }[rawState] || rawState;
+
+  const progressExact = p.progressExact || `${p.progressPct || 0}.0`;
+  const progressNum = Math.min(100, Math.max(0, parseFloat(progressExact) || p.progressPct || 0));
+  const elapsedFmt = formatPrintDuration(p.timeElapsedSecs);
+  const remainingFmt = formatPrintDuration(p.timeRemainingSecs);
+  const totalEstFmt = formatPrintDuration(p.estimatedTotalSecs || (p.timeElapsedSecs + p.timeRemainingSecs));
+  const etaClock = (isPrinting || isPaused) ? formatPrintEta(p.timeRemainingSecs) : "—";
 
   const nozzleHot = p.nozzleTempC >= 50;
   const bedHot = p.bedTempC >= 45;
+  const nozzlePct = Math.min(100, Math.round((Math.max(0, p.nozzleTempC) / Math.max(220, p.nozzleTargetC || 220)) * 100));
+  const bedPct = Math.min(100, Math.round((Math.max(0, p.bedTempC) / Math.max(70, p.bedTargetC || 70)) * 100));
+
+  const partTitle = formatCleanPartName(p.displayName || p.filename);
+  const hasDimensions = Boolean(p.modelWidthMm && p.modelDepthMm && p.modelHeightMm);
+  const dimensionsStr = hasDimensions
+    ? `${p.modelWidthMm} × ${p.modelDepthMm} × ${p.modelHeightMm} mm`
+    : "Plateau Ender 3 (220×220 mm)";
+
+  const layerStr = p.totalLayers > 0
+    ? `${p.currentLayer || 1} / ${p.totalLayers}`
+    : (isPrinting ? "En cours" : "—");
+  const zHeightStr = p.currentZMm
+    ? `${p.currentZMm} / ${p.modelHeightMm || "?"} mm`
+    : (p.modelHeightMm ? `${p.modelHeightMm} mm` : "—");
+
+  const ringRadius = 72;
+  const ringCircumference = (2 * Math.PI * ringRadius).toFixed(1);
+  const ringOffset = (ringCircumference * (1 - progressNum / 100)).toFixed(1);
+  const scanlineBottomPct = Math.min(92, Math.max(8, Math.round(progressNum)));
+
+  const octoUrl = p.octoprintUrl || "http://192.168.0.107:5000";
+  const mjpegStreamUrl = `${octoUrl.replace(":5000", ":5001")}/mjpeg`;
+  const snapshotUrl = `/api/printer3d/camera/snapshot?t=${Date.now()}`;
+
+  const recentFiles = p.recentFiles || [];
+  const logs = p.logs || [];
 
   stage.innerHTML = `
     <div class="org-view">
-      <div class="row" style="justify-content:space-between;margin-bottom:16px;">
+      <div class="row" style="justify-content:space-between;margin-bottom:14px;">
         <div>
-          <h2>🖨️ Impression 3D & Ender 3 (Klipper / Octo4a)</h2>
-          <div style="color:var(--muted);font-size:13px;">Cycle d'alimentation intelligent, surveillance thermique et progression en direct</div>
+          <div class="row" style="gap:10px;">
+            <h2>🖨️ Cockpit Impression 3D — Ender 3</h2>
+            <span class="badge" style="background:rgba(56,189,248,0.18);color:var(--primary);">
+              ${escapeHtml(p.octoprintVersion || "OctoPrint 1.11")} • ${escapeHtml(p.printerPort || "/tmp/printer")}
+            </span>
+            <span class="badge" style="background:rgba(168,85,247,0.18);color:#e9d5ff;">
+              👤 ${escapeHtml(p.user || "zacharie")} @ 192.168.0.107:5000
+            </span>
+          </div>
+          <div style="color:var(--muted);font-size:13px;margin-top:3px;">
+            ${escapeHtml(p.message || "Pilotage direct OctoPrint / Klipper, aperçu 3D de la pièce et gestion thermique intelligente")}
+          </div>
         </div>
         <div class="row" style="gap:8px;">
-          <button class="btn primary" id="btn-printer-refresh">↻ Synchroniser</button>
+          <a class="btn" href="${escapeHtml(octoUrl)}" target="_blank" rel="noopener" style="text-decoration:none;">↗ Ouvrir OctoPrint</a>
+          <button class="btn primary" id="btn-printer-refresh">↻ Actualiser</button>
         </div>
       </div>
+
+      ${printer3dActionFeedback ? `
+        <div class="card" style="margin-bottom:12px;padding:10px 14px;border-left:4px solid var(--primary);display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-size:13px;">${escapeHtml(printer3dActionFeedback)}</span>
+          <button class="btn" id="btn-clear-3d-feedback" style="padding:2px 8px;font-size:11px;">✕</button>
+        </div>
+      ` : ""}
 
       <div class="kpi-grid-4">
         <div class="kpi-card">
-          <div class="kpi-label"><span>État & Cycle</span><span>⚡</span></div>
-          <div class="kpi-value" style="font-size:24px;color:${stateColor}">${escapeHtml(p.state || "STANDBY")}</div>
-          <div class="kpi-sub">${escapeHtml(p.message || "Prêt")}</div>
+          <div class="kpi-label"><span>Statut Ender 3</span><span>⚡</span></div>
+          <div class="kpi-value" style="font-size:21px;color:${stateColor}">${escapeHtml(stateLabel)}</div>
+          <div class="kpi-sub">
+            ${p.connected ? "🟢 Connectée à OctoPrint" : "🔴 OctoPrint hors ligne"}
+            ${p.slicer ? ` • ${escapeHtml(p.slicer)}` : ""}
+          </div>
         </div>
+
         <div class="kpi-card">
-          <div class="kpi-label"><span>Progression</span><span>🎯</span></div>
-          <div class="kpi-value" style="color:var(--primary);">${p.progressPct}%</div>
-          <div class="bar-track"><div class="bar-fill" style="width:${p.progressPct}%;background:var(--primary);"></div></div>
-          <div class="kpi-sub">${escapeHtml(p.filename || "—")}</div>
+          <div class="kpi-label"><span>Progression Pièce</span><span>🎯</span></div>
+          <div class="row" style="justify-content:space-between;align-items:baseline;">
+            <div class="kpi-value" style="color:var(--primary);">${escapeHtml(progressExact)}%</div>
+            <span style="font-size:12px;color:var(--muted);font-weight:700;">Couche ${escapeHtml(layerStr)}</span>
+          </div>
+          <div class="bar-track"><div class="bar-fill" style="width:${progressNum}%;background:linear-gradient(90deg,#38bdf8,#a855f7);"></div></div>
+          <div class="kpi-sub" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${escapeHtml(p.filename || "")}">
+            📦 ${escapeHtml(partTitle)}
+          </div>
         </div>
+
         <div class="kpi-card">
-          <div class="kpi-label"><span>Durée restante</span><span>⏳</span></div>
-          <div class="kpi-value" style="font-size:24px;">${p.timeRemainingSecs > 0 ? remainingFmt : (isPrinting ? "Calcul..." : "—")}</div>
-          <div class="kpi-sub">Écoulé : ${elapsedFmt}</div>
+          <div class="kpi-label"><span>Temps & Fin Estimée (ETA)</span><span>⏳</span></div>
+          <div class="row" style="justify-content:space-between;align-items:baseline;">
+            <div class="kpi-value" style="font-size:22px;">${p.timeRemainingSecs > 0 ? remainingFmt : (isPrinting ? "Calcul…" : "—")}</div>
+            ${etaClock !== "—" ? `<span class="badge" style="background:rgba(34,197,94,0.18);color:#86efac;">🏁 Fin ~${escapeHtml(etaClock)}</span>` : ""}
+          </div>
+          <div class="kpi-sub">Écoulé : <strong>${escapeHtml(elapsedFmt)}</strong> • Estimé : ${escapeHtml(totalEstFmt)}</div>
         </div>
+
         <div class="kpi-card">
-          <div class="kpi-label"><span>Alimentation Prise</span><span>🔌</span></div>
-          <div class="kpi-value" style="color:${p.plugOn ? "var(--ok)" : "var(--muted)"};">${p.plugOn ? "ALLUMÉE" : "ÉTEINTE"}</div>
-          <div class="kpi-sub">${p.plugOn ? `${p.powerW} W instantanés` : "Hors tension sécurisé"}</div>
+          <div class="kpi-label"><span>Alimentation & Sécurité</span><span>🔌</span></div>
+          <div class="row" style="justify-content:space-between;align-items:baseline;">
+            <div class="kpi-value" style="font-size:22px;color:${p.plugOn ? "var(--ok)" : "var(--muted)"};">${p.plugOn ? "SOUS TENSION" : "COUPÉE"}</div>
+            <span style="font-size:14px;font-weight:800;color:var(--primary);">${p.plugOn ? `~${p.powerW} W` : "0 W"}</span>
+          </div>
+          <div class="kpi-sub">${p.autoShutdownEnabled ? "🛡️ Auto-cooldown < 50°C actif" : "⚪ Extinction auto désactivée"}</div>
         </div>
       </div>
 
-      <div class="grid-2" style="margin-bottom:16px;">
-        <div class="card" style="display:flex;flex-direction:column;justify-content:space-between;">
-          <h3 style="margin-bottom:14px;">🌡️ Surveillance Thermique en Direct</h3>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px;">
-            <div class="thermal-box">
-              <div style="font-size:12px;color:var(--muted);font-weight:700;">BUSE (HOTEND)</div>
-              <div class="thermal-temp ${nozzleHot ? "hot" : p.nozzleTempC > 30 ? "warm" : "cold"}">${p.nozzleTempC}°C</div>
-              <div style="font-size:13px;color:var(--muted);">Consigne : <strong>${p.nozzleTargetC}°C</strong></div>
+      <!-- SECTION PRINCIPALE : PIÈCE IMPRIMÉE (APERÇU 3D & MÉTADONNÉES) + CAMÉRA LIVE -->
+      <div class="grid-2" style="height:auto;margin-bottom:16px;grid-template-columns:0.54fr 0.46fr;">
+        <div class="card" style="display:flex;flex-direction:column;gap:14px;">
+          <div class="row" style="justify-content:space-between;align-items:center;">
+            <div>
+              <h3>🧩 Pièce Imprimée & Modèle G-Code</h3>
+              <div style="font-size:12px;color:var(--primary);font-weight:700;margin-top:2px;">${escapeHtml(partTitle)}</div>
             </div>
-            <div class="thermal-box">
-              <div style="font-size:12px;color:var(--muted);font-weight:700;">PLATEAU (BED)</div>
-              <div class="thermal-temp ${bedHot ? "hot" : p.bedTempC > 30 ? "warm" : "cold"}">${p.bedTempC}°C</div>
-              <div style="font-size:13px;color:var(--muted);">Consigne : <strong>${p.bedTargetC}°C</strong></div>
+            ${p.slicer ? `<span class="badge">🔪 ${escapeHtml(p.slicer)}</span>` : `<span class="badge">G-Code Local</span>`}
+          </div>
+
+          <div style="display:grid;grid-template-columns:1.15fr 0.85fr;gap:14px;align-items:center;">
+            <div class="part-preview-stage" title="Aperçu 3D extrait du G-code (${escapeHtml(p.filename || "")})">
+              <div class="part-preview-grid"></div>
+              ${isPrinting ? `<div class="part-scanline" style="bottom:${scanlineBottomPct}%;"></div>` : ""}
+              ${p.thumbnailDataUrl ? `
+                <img class="part-preview-img" src="${p.thumbnailDataUrl}" alt="Aperçu de la pièce ${escapeHtml(partTitle)}" />
+              ` : `
+                <div style="position:relative;z-index:2;text-align:center;color:var(--muted);padding:16px;">
+                  <div style="font-size:52px;line-height:1;margin-bottom:8px;">🧊</div>
+                  <div style="font-weight:700;color:var(--text);font-size:14px;">${escapeHtml(partTitle)}</div>
+                  <div style="font-size:11px;margin-top:4px;">${escapeHtml(dimensionsStr)}</div>
+                </div>
+              `}
+              <div style="position:absolute;bottom:8px;left:10px;right:10px;display:flex;justify-content:space-between;font-size:11px;color:var(--muted);z-index:4;background:rgba(9,13,22,0.78);padding:4px 8px;border-radius:8px;border:1px solid var(--border);">
+                <span>📐 ${escapeHtml(dimensionsStr)}</span>
+                <span>Z: <strong style="color:var(--primary);">${escapeHtml(zHeightStr)}</strong></span>
+              </div>
+            </div>
+
+            <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;">
+              <div class="print-progress-ring-wrap">
+                <svg class="print-progress-ring" width="168" height="168">
+                  <circle cx="84" cy="84" r="${ringRadius}" stroke="rgba(38,51,73,0.8)" stroke-width="12" fill="transparent" />
+                  <circle cx="84" cy="84" r="${ringRadius}" stroke="#38bdf8" stroke-width="12" fill="transparent"
+                    stroke-linecap="round"
+                    stroke-dasharray="${ringCircumference}"
+                    stroke-dashoffset="${ringOffset}" />
+                </svg>
+                <div style="position:absolute;text-align:center;">
+                  <div style="font-size:28px;font-weight:900;color:var(--text);font-variant-numeric:tabular-nums;">${escapeHtml(progressExact)}%</div>
+                  <div style="font-size:11px;color:var(--primary);font-weight:700;">Couche ${escapeHtml(layerStr)}</div>
+                  <div style="font-size:10px;color:var(--muted);margin-top:2px;">${formatBytesSize(p.filePosBytes)} / ${formatBytesSize(p.fileSizeBytes)}</div>
+                </div>
+              </div>
             </div>
           </div>
-          <div style="background:var(--bg);padding:12px;border-radius:12px;border:1px solid var(--border);font-size:13px;color:var(--muted);">
-            🛡️ <strong>Sécurité Extinction :</strong> L'extinction automatique attend que la buse et le plateau soient passés sous 50°C pour éviter tout bouchage thermique ou choc du filament.
+
+          <div class="spec-pill-grid">
+            <div class="spec-pill">
+              <div class="spec-pill-label">🧵 Filament PLA</div>
+              <div class="spec-pill-val">${p.filamentLengthM ? `${escapeHtml(p.filamentLengthM)} m` : "—"}</div>
+              <div style="font-size:11px;color:var(--muted);">${p.filamentWeightG ? `~${escapeHtml(p.filamentWeightG)} g (${escapeHtml(p.filamentVolumeCm3)} cm³)` : "Bobine 1.75 mm"}</div>
+            </div>
+            <div class="spec-pill">
+              <div class="spec-pill-label">📏 Volume & Couches</div>
+              <div class="spec-pill-val">${p.totalLayers > 0 ? `${p.totalLayers} couches` : "—"}</div>
+              <div style="font-size:11px;color:var(--muted);">Hauteur max : ${p.modelHeightMm ? `${escapeHtml(p.modelHeightMm)} mm` : "—"}</div>
+            </div>
+            <div class="spec-pill">
+              <div class="spec-pill-label">📄 Fichier G-Code</div>
+              <div class="spec-pill-val">${formatBytesSize(p.fileSizeBytes)}</div>
+              <div style="font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${escapeHtml(p.filename || "")}">
+                ${escapeHtml(p.filename || "—")}
+              </div>
+            </div>
           </div>
         </div>
 
-        <div class="card" style="display:flex;flex-direction:column;justify-content:space-between;">
-          <h3 style="margin-bottom:14px;">🎮 Pilotage & Actions Rapides</h3>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
-            <button class="btn ok" id="btn-print-power-on" style="padding:14px;font-size:14px;font-weight:700;">
-              ⚡ Allumer Imprimante
-            </button>
-            <button class="btn" id="btn-print-cooldown" style="padding:14px;font-size:14px;font-weight:700;border-color:#38bdf8;color:#38bdf8;">
-              ❄️ Refroidir & Couper
-            </button>
-            <button class="btn primary" id="btn-print-wake" style="padding:14px;font-size:14px;font-weight:700;">
-              🚀 Réveil & Impression
-            </button>
-            <button class="btn danger" id="btn-print-power-off" style="padding:14px;font-size:14px;font-weight:700;">
-              🛑 Forcer Coupure
-            </button>
+        <!-- CAMÉRA EN DIRECT OCTO4A & CONTRÔLE DU JOB -->
+        <div class="card" style="display:flex;flex-direction:column;justify-content:space-between;gap:12px;">
+          <div class="row" style="justify-content:space-between;align-items:center;">
+            <div>
+              <h3>📷 Vue Caméra Plateau (Octo4a Live)</h3>
+              <div style="font-size:12px;color:var(--muted);">Flux optique de surveillance de la pièce en cours d'impression</div>
+            </div>
+            <div class="row" style="gap:6px;">
+              <button class="pill ${printer3dCameraMode === "SNAPSHOT" ? "active" : ""}" id="btn-cam-mode-snap" style="font-size:11px;padding:4px 10px;">📸 Snapshot 5s</button>
+              <button class="pill ${printer3dCameraMode === "MJPEG" ? "active" : ""}" id="btn-cam-mode-mjpeg" style="font-size:11px;padding:4px 10px;">🎥 Flux MJPEG</button>
+            </div>
           </div>
-          <div style="background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.3);border-radius:10px;padding:12px;font-size:12px;color:var(--text);">
-            🎙️ <strong>Pilotage Vocal Meishi :</strong> Dites à tout moment <em>"Éteins l'imprimante 3D"</em> ou <em>"Quel est le temps restant sur l'impression ?"</em> depuis la tablette.
+
+          <div class="webcam-stage">
+            <img
+              id="printer3d-webcam-img"
+              class="webcam-img"
+              src="${printer3dCameraMode === "MJPEG" ? escapeHtml(mjpegStreamUrl) : escapeHtml(snapshotUrl)}"
+              alt="Caméra Ender 3"
+              onerror="this.style.display='none';const fb=document.getElementById('printer3d-webcam-fallback');if(fb)fb.style.display='flex';"
+            />
+            <div id="printer3d-webcam-fallback" style="display:none;flex-direction:column;align-items:center;justify-content:center;padding:20px;text-align:center;color:var(--muted);">
+              <div style="font-size:36px;margin-bottom:6px;">📷</div>
+              <div style="font-size:13px;font-weight:600;color:var(--text);">Caméra Octo4a en veille ou inaccessible</div>
+              <div style="font-size:11px;margin-top:4px;">Flux : 192.168.0.107:5001/snapshot</div>
+            </div>
+            <div style="position:absolute;top:10px;left:10px;background:rgba(9,13,22,0.82);border:1px solid var(--border);padding:3px 9px;border-radius:999px;font-size:11px;font-weight:700;color:#86efac;">
+              ● LIVE ENDER 3
+            </div>
+          </div>
+
+          <div>
+            <div style="font-size:12px;color:var(--muted);font-weight:700;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em;">
+              🎛️ Contrôle Direct du Job OctoPrint
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;">
+              <button class="btn ok" id="btn-octo-job-start" ${isPrinting ? "disabled" : ""} style="padding:10px;font-weight:700;">
+                ▶️ Démarrer
+              </button>
+              <button class="btn" id="btn-octo-job-pause" ${(!isPrinting && !isPaused) ? "disabled" : ""} style="padding:10px;font-weight:700;border-color:var(--warn);color:#fde68a;">
+                ${isPaused ? "▶️ Reprendre" : "⏸️ Pause"}
+              </button>
+              <button class="btn danger" id="btn-octo-job-cancel" ${(!isPrinting && !isPaused) ? "disabled" : ""} style="padding:10px;font-weight:700;">
+                ⏹️ Annuler Job
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SECTION THERMIQUE + ALIMENTATION + FICHIERS G-CODE -->
+      <div class="grid-2" style="height:auto;grid-template-columns:0.48fr 0.52fr;">
+        <div class="col">
+          <div class="card">
+            <h3 style="margin-bottom:12px;">🌡️ Surveillance Thermique & Alimentation</h3>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
+              <div class="thermal-box">
+                <div style="font-size:11px;color:var(--muted);font-weight:700;">BUSE (HOTEND TOOL0)</div>
+                <div class="thermal-temp ${nozzleHot ? "hot" : p.nozzleTempC > 30 ? "warm" : "cold"}">${p.nozzleTempC}°C</div>
+                <div style="font-size:12px;color:var(--muted);">Cible : <strong>${p.nozzleTargetC}°C</strong></div>
+                <div class="bar-track" style="margin-top:6px;"><div class="bar-fill" style="width:${nozzlePct}%;background:${nozzleHot ? "#f87171" : "#38bdf8"};"></div></div>
+              </div>
+              <div class="thermal-box">
+                <div style="font-size:11px;color:var(--muted);font-weight:700;">PLATEAU CHAUFFANT (BED)</div>
+                <div class="thermal-temp ${bedHot ? "hot" : p.bedTempC > 30 ? "warm" : "cold"}">${p.bedTempC}°C</div>
+                <div style="font-size:12px;color:var(--muted);">Cible : <strong>${p.bedTargetC}°C</strong></div>
+                <div class="bar-track" style="margin-top:6px;"><div class="bar-fill" style="width:${bedPct}%;background:${bedHot ? "#fbbf24" : "#38bdf8"};"></div></div>
+              </div>
+            </div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+              <button class="btn ok" id="btn-print-power-on" style="padding:11px;font-size:13px;font-weight:700;">
+                ⚡ Allumer Prise Ender
+              </button>
+              <button class="btn" id="btn-print-cooldown" style="padding:11px;font-size:13px;font-weight:700;border-color:#38bdf8;color:#38bdf8;">
+                ❄️ Refroidir & Couper (&lt;50°C)
+              </button>
+              <button class="btn primary" id="btn-print-wake" style="padding:11px;font-size:13px;font-weight:700;">
+                🚀 Réveil + Connexion Klipper
+              </button>
+              <button class="btn danger" id="btn-print-power-off" style="padding:11px;font-size:13px;font-weight:700;">
+                🛑 Coupure Forcée 230V
+              </button>
+            </div>
+
+            <div style="background:var(--bg);padding:10px 12px;border-radius:10px;border:1px solid var(--border);font-size:12px;color:var(--muted);">
+              🛡️ <strong>Protection Hotend :</strong> L'orchestrateur attend que la buse passe sous <strong>50°C</strong> avant de couper la prise connectée Home Assistant.
+            </div>
+          </div>
+        </div>
+
+        <div class="col">
+          <div class="card">
+            <div class="row" style="justify-content:space-between;margin-bottom:10px;">
+              <h3>📂 Bibliothèque G-Code OctoPrint (${recentFiles.length})</h3>
+              <span style="font-size:11px;color:var(--muted);">Stockage local Octo4a</span>
+            </div>
+            ${recentFiles.length ? `
+              <div style="display:flex;flex-direction:column;gap:8px;max-height:240px;overflow-y:auto;">
+                ${recentFiles.map((f) => {
+                  const isCurrent = f.name === p.filename || f.path === p.filename;
+                  const cleanName = formatCleanPartName(f.name);
+                  const estDur = formatPrintDuration(f.estimatedTimeSecs);
+                  const filM = f.filamentLengthMm ? `${(f.filamentLengthMm / 1000).toFixed(1)} m` : "";
+                  return `
+                    <div style="background:var(--bg);border:1px solid ${isCurrent ? "var(--primary)" : "var(--border)"};border-radius:10px;padding:9px 12px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
+                      <div style="min-width:0;flex:1;">
+                        <div class="row" style="gap:6px;">
+                          <strong style="font-size:13px;color:${isCurrent ? "var(--primary)" : "var(--text)"};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                            ${isCurrent ? "🖨️ " : "📄 "}${escapeHtml(cleanName)}
+                          </strong>
+                          ${isCurrent ? `<span class="badge" style="font-size:10px;">Actif</span>` : ""}
+                        </div>
+                        <div style="font-size:11px;color:var(--muted);margin-top:2px;">
+                          ${formatBytesSize(f.sizeBytes)}
+                          ${estDur !== "—" ? ` • ⏱️ ${escapeHtml(estDur)}` : ""}
+                          ${filM ? ` • 🧵 ${escapeHtml(filM)}` : ""}
+                          ${f.dimensionsMm ? ` • 📐 ${escapeHtml(f.dimensionsMm)}` : ""}
+                        </div>
+                      </div>
+                      <div class="row" style="gap:6px;flex-shrink:0;">
+                        <button class="btn octo-select-file-btn" data-path="${escapeHtml(f.path)}" data-print="0" style="padding:4px 9px;font-size:11px;" ${isPrinting ? "disabled" : ""}>
+                          Charger
+                        </button>
+                        <button class="btn primary octo-select-file-btn" data-path="${escapeHtml(f.path)}" data-print="1" style="padding:4px 9px;font-size:11px;" ${isPrinting ? "disabled" : ""}>
+                          ▶️ Imprimer
+                        </button>
+                      </div>
+                    </div>
+                  `;
+                }).join("")}
+              </div>
+            ` : `
+              <div style="color:var(--muted);font-size:13px;padding:10px 0;">Aucun fichier G-code trouvé sur OctoPrint.</div>
+            `}
+
+            ${logs.length ? `
+              <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;">
+                <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;">📜 Journal Orchestrateur Ender</div>
+                <div style="background:#060911;border:1px solid var(--border);border-radius:8px;padding:8px 10px;max-height:95px;overflow-y:auto;font-family:ui-monospace,monospace;font-size:11px;color:#cbd5e1;">
+                  ${logs.slice(-6).map((l) => `<div><span style="color:var(--muted);">[${escapeHtml(l.time)}]</span> ${escapeHtml(l.text)}</div>`).join("")}
+                </div>
+              </div>
+            ` : ""}
           </div>
         </div>
       </div>
     </div>
   `;
 
+  const clearFbBtn = document.getElementById("btn-clear-3d-feedback");
+  if (clearFbBtn) {
+    clearFbBtn.onclick = () => {
+      printer3dActionFeedback = "";
+      renderOrg3DPrint(stage, currentSnapshot || snap);
+    };
+  }
+
+  const btnSnap = document.getElementById("btn-cam-mode-snap");
+  if (btnSnap) {
+    btnSnap.onclick = () => {
+      printer3dCameraMode = "SNAPSHOT";
+      renderOrg3DPrint(stage, currentSnapshot || snap);
+    };
+  }
+  const btnMjpeg = document.getElementById("btn-cam-mode-mjpeg");
+  if (btnMjpeg) {
+    btnMjpeg.onclick = () => {
+      printer3dCameraMode = "MJPEG";
+      renderOrg3DPrint(stage, currentSnapshot || snap);
+    };
+  }
+
   const btnRefresh = document.getElementById("btn-printer-refresh");
-  if (btnRefresh) btnRefresh.onclick = () => api("/api/printer3d/status", "GET");
+  if (btnRefresh) {
+    btnRefresh.onclick = async () => {
+      btnRefresh.textContent = "⏳ Synchro…";
+      await api("/api/printer3d/status", "GET");
+    };
+  }
+
+  const btnJobStart = document.getElementById("btn-octo-job-start");
+  if (btnJobStart) {
+    btnJobStart.onclick = async () => {
+      printer3dActionFeedback = "▶️ Démarrage de l'impression envoyé à OctoPrint…";
+      await api("/api/printer3d/job", "POST", { action: "start" });
+    };
+  }
+
+  const btnJobPause = document.getElementById("btn-octo-job-pause");
+  if (btnJobPause) {
+    btnJobPause.onclick = async () => {
+      const act = isPaused ? "resume" : "pause";
+      printer3dActionFeedback = isPaused ? "▶️ Reprise de l'impression envoyée à OctoPrint…" : "⏸️ Mise en pause envoyée à OctoPrint…";
+      await api("/api/printer3d/job", "POST", { action: act });
+    };
+  }
+
+  const btnJobCancel = document.getElementById("btn-octo-job-cancel");
+  if (btnJobCancel) {
+    btnJobCancel.onclick = async () => {
+      if (!confirm("Confirmer l'annulation de l'impression en cours sur l'Ender 3 ?")) return;
+      printer3dActionFeedback = "⏹️ Annulation du job envoyée à OctoPrint…";
+      await api("/api/printer3d/job", "POST", { action: "cancel" });
+    };
+  }
+
+  stage.querySelectorAll(".octo-select-file-btn").forEach((btn) => {
+    btn.onclick = async () => {
+      const path = btn.getAttribute("data-path");
+      const printNow = btn.getAttribute("data-print") === "1";
+      if (!path) return;
+      printer3dActionFeedback = printNow
+        ? `🚀 Chargement et lancement de ${path} sur OctoPrint…`
+        : `📂 Fichier ${path} sélectionné dans OctoPrint.`;
+      await api("/api/printer3d/files/select", "POST", { path, print: printNow });
+    };
+  });
 
   const btnOn = document.getElementById("btn-print-power-on");
-  if (btnOn) btnOn.onclick = () => api("/api/printer3d/power/on", "POST");
+  if (btnOn) {
+    btnOn.onclick = async () => {
+      printer3dActionFeedback = "⚡ Allumage de la prise Ender 3 demandé…";
+      await api("/api/printer3d/power/on", "POST");
+    };
+  }
 
   const btnCool = document.getElementById("btn-print-cooldown");
-  if (btnCool) btnCool.onclick = () => api("/api/printer3d/cooldown", "POST");
+  if (btnCool) {
+    btnCool.onclick = async () => {
+      printer3dActionFeedback = "❄️ Séquence de refroidissement (< 50°C) et extinction lancée…";
+      await api("/api/printer3d/cooldown", "POST");
+    };
+  }
 
   const btnOff = document.getElementById("btn-print-power-off");
-  if (btnOff) btnOff.onclick = () => api("/api/printer3d/power/off", "POST", { force: true });
+  if (btnOff) {
+    btnOff.onclick = async () => {
+      if (p.nozzleTempC > 55 && !confirm(`Attention : la buse est à ${p.nozzleTempC}°C (> 50°C). Forcer la coupure électrique immédiate ?`)) {
+        return;
+      }
+      printer3dActionFeedback = "🛑 Coupure électrique immédiate envoyée…";
+      await api("/api/printer3d/power/off", "POST", { force: true });
+    };
+  }
 
   const btnWake = document.getElementById("btn-print-wake");
-  if (btnWake) btnWake.onclick = () => api("/api/printer3d/wake-and-print", "POST");
+  if (btnWake) {
+    btnWake.onclick = async () => {
+      printer3dActionFeedback = "🚀 Séquence de réveil et connexion Klipper lancée…";
+      await api("/api/printer3d/wake-and-print", "POST");
+    };
+  }
 }
 
 let selectedNewsSource = "ALL";

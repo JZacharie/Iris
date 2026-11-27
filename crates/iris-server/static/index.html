@@ -442,7 +442,7 @@
     }
     /* 3D Printing Specific Styles */
     .print-progress-ring-wrap {
-      position: relative; width: 190px; height: 190px; margin: 0 auto;
+      position: relative; width: 176px; height: 176px; margin: 0 auto;
       display: flex; align-items: center; justify-content: center; flex-direction: column;
     }
     .print-progress-ring { transform: rotate(-90deg); }
@@ -455,6 +455,71 @@
     .thermal-temp.hot { color: #f87171; }
     .thermal-temp.warm { color: #fbbf24; }
     .thermal-temp.cold { color: #38bdf8; }
+    .part-preview-stage {
+      position: relative;
+      background: radial-gradient(circle at 50% 42%, rgba(56,189,248,0.16), rgba(9,13,22,0.96) 72%);
+      border: 1px solid rgba(56,189,248,0.35);
+      border-radius: 16px;
+      min-height: 250px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      padding: 14px;
+    }
+    .part-preview-grid {
+      position: absolute; inset: 0;
+      background-image:
+        linear-gradient(rgba(56,189,248,0.07) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(56,189,248,0.07) 1px, transparent 1px);
+      background-size: 24px 24px;
+      pointer-events: none;
+    }
+    .part-preview-img {
+      position: relative; z-index: 2;
+      max-width: 230px; max-height: 230px;
+      object-fit: contain;
+      filter: drop-shadow(0 12px 24px rgba(0,0,0,0.65));
+      transition: transform 0.25s ease;
+    }
+    .part-preview-img:hover { transform: scale(1.05); }
+    .part-scanline {
+      position: absolute; left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, #38bdf8, #a855f7, transparent);
+      box-shadow: 0 0 10px #38bdf8;
+      z-index: 3;
+      pointer-events: none;
+    }
+    .webcam-stage {
+      position: relative;
+      background: #050811;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      min-height: 250px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    .webcam-img {
+      width: 100%; height: 250px;
+      object-fit: cover;
+      display: block;
+    }
+    .spec-pill-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .spec-pill {
+      background: rgba(9,13,22,0.75);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 12px;
+    }
+    .spec-pill-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    .spec-pill-val { font-size: 15px; font-weight: 800; color: var(--text); margin-top: 3px; font-variant-numeric: tabular-nums; }
     /* Domotique Zones Styles */
     .zone-section { margin-bottom: 20px; }
     .zone-title {
@@ -662,6 +727,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=20261122_0745"></script>
+  <script src="/app.js?v=20261126_1635"></script>
 </body>
 </html>

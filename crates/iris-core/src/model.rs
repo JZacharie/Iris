@@ -780,6 +780,35 @@ pub struct IrisPersistedState {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct Printer3DFileSummary {
+    pub name: String,
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub size_bytes: u64,
+    #[serde(default)]
+    pub estimated_time_secs: u64,
+    #[serde(default)]
+    pub filament_length_mm: u64,
+    #[serde(default)]
+    pub dimensions_mm: String,
+    #[serde(default)]
+    pub uploaded_at_epoch_secs: i64,
+    #[serde(default)]
+    pub last_print_success: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Printer3DLogEntry {
+    pub time: String,
+    pub text: String,
+    #[serde(default)]
+    pub level: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Printer3DStatus {
     pub connected: bool,
     #[serde(default)]
@@ -789,11 +818,55 @@ pub struct Printer3DStatus {
     #[serde(default)]
     pub progress_pct: u32,
     #[serde(default)]
+    pub progress_exact: String,
+    #[serde(default)]
     pub time_elapsed_secs: u64,
     #[serde(default)]
     pub time_remaining_secs: u64,
     #[serde(default)]
+    pub estimated_total_secs: u64,
+    #[serde(default)]
     pub filename: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub file_size_bytes: u64,
+    #[serde(default)]
+    pub file_pos_bytes: u64,
+    #[serde(default)]
+    pub user: String,
+    #[serde(default)]
+    pub slicer: String,
+    #[serde(default)]
+    pub filament_length_m: String,
+    #[serde(default)]
+    pub filament_volume_cm3: String,
+    #[serde(default)]
+    pub filament_weight_g: String,
+    #[serde(default)]
+    pub model_width_mm: String,
+    #[serde(default)]
+    pub model_depth_mm: String,
+    #[serde(default)]
+    pub model_height_mm: String,
+    #[serde(default)]
+    pub total_layers: u32,
+    #[serde(default)]
+    pub current_layer: u32,
+    #[serde(default)]
+    pub current_z_mm: String,
+    #[serde(default)]
+    pub thumbnail_data_url: Option<String>,
+    #[serde(default)]
+    pub webcam_available: bool,
+    #[serde(default)]
+    pub octoprint_url: String,
+    #[serde(default)]
+    pub octoprint_version: String,
+    #[serde(default)]
+    pub printer_port: String,
+    #[serde(default)]
+    pub auto_shutdown_enabled: bool,
     #[serde(default)]
     pub nozzle_temp_c: i32,
     #[serde(default)]
@@ -806,6 +879,10 @@ pub struct Printer3DStatus {
     pub plug_on: bool,
     #[serde(default)]
     pub power_w: i32,
+    #[serde(default)]
+    pub recent_files: Vec<Printer3DFileSummary>,
+    #[serde(default)]
+    pub logs: Vec<Printer3DLogEntry>,
     #[serde(default)]
     pub updated_at_epoch_ms: i64,
 }

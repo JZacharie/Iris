@@ -73,6 +73,15 @@ pub fn api_router(state: AppState) -> Router {
         .route("/api/agents/trigger", post(trigger_amaraki_agent))
         .route("/api/voice/intent", post(post_voice_intent))
         .route("/api/printer3d/status", get(get_printer3d_status))
+        .route(
+            "/api/printer3d/camera/snapshot",
+            get(get_printer3d_camera_snapshot),
+        )
+        .route("/api/printer3d/job", post(post_printer3d_job))
+        .route(
+            "/api/printer3d/files/select",
+            post(post_printer3d_select_file),
+        )
         .route("/api/printer3d/power/on", post(power_on_printer3d))
         .route("/api/printer3d/power/off", post(power_off_printer3d))
         .route("/api/printer3d/cooldown", post(cooldown_printer3d))
@@ -686,6 +695,68 @@ async fn cooldown_printer3d(State(state): State<AppState>) -> impl IntoResponse 
 
 async fn wake_and_print_printer3d(State(state): State<AppState>) -> impl IntoResponse {
     let ok = state.ender.wake_and_print().await.unwrap_or(false);
+    if let Ok(st) = state.ender.fetch_status().await {
+        state.controller.apply_printer3d_telemetry(Some(st)).await;
+    }
+    Json(serde_json::json!({ "success": ok }))
+}
+
+async fn get_printer3d_camera_snapshot(State(state): State<AppState>) -> impl IntoResponse {
+    match state.ender.fetch_webcam_snapshot().await {
+        Ok((bytes, content_type)) => (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, content_type),
+                (header::CACHE_CONTROL, "no-store, max-age=0".to_string()),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Printer3DJobReq {
+    action: String,
+}
+
+async fn post_printer3d_job(
+    State(state): State<AppState>,
+    Json(req): Json<Printer3DJobReq>,
+) -> impl IntoResponse {
+    let ok = state.ender.job_command(&req.action).await.unwrap_or(false);
+    if let Ok(st) = state.ender.fetch_status().await {
+        state.controller.apply_printer3d_telemetry(Some(st)).await;
+    }
+    Json(serde_json::json!({ "success": ok }))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Printer3DSelectFileReq {
+    path: String,
+    #[serde(default)]
+    print: bool,
+}
+
+async fn post_printer3d_select_file(
+    State(state): State<AppState>,
+    Json(req): Json<Printer3DSelectFileReq>,
+) -> impl IntoResponse {
+    let ok = state
+        .ender
+        .select_file(&req.path, req.print)
+        .await
+        .unwrap_or(false);
+    if let Ok(st) = state.ender.fetch_status().await {
+        state.controller.apply_printer3d_telemetry(Some(st)).await;
+    }
     Json(serde_json::json!({ "success": ok }))
 }
 

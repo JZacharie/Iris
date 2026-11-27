@@ -34,6 +34,16 @@ spec:
               value: "emqx.emqx.svc.cluster.local"
             - name: IRIS_MQTT_PORT
               value: "1883"
+            - name: IRIS_ENDER_URL
+              value: "http://192.168.0.107:8088"
+            - name: IRIS_OCTOPRINT_URL
+              value: "http://192.168.0.107:5000"
+            - name: IRIS_OCTOPRINT_USER
+              value: "zacharie"
+            - name: IRIS_OCTOPRINT_PASSWORD
+              value: "Superman69230"
+            - name: IRIS_OCTOPRINT_WEBCAM_SNAPSHOT_URL
+              value: "http://192.168.0.107:5001/snapshot"
           livenessProbe:
             httpGet:
               path: /api/health
